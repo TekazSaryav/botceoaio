@@ -1757,6 +1757,45 @@ async def apply_voctemp_toggles(channel: discord.VoiceChannel, room_data: dict):
     )
 
 
+async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previous_owner_id: int = None):
+    """Rendre le salon panel privé et visible uniquement par le propriétaire actuel."""
+    text_channel = guild.get_channel(room_data['text_channel_id'])
+    if not text_channel:
+        return
+
+    everyone = guild.default_role
+    await text_channel.set_permissions(
+        everyone,
+        view_channel=False,
+        read_message_history=False,
+        send_messages=False
+    )
+
+    owner_member = guild.get_member(room_data['owner_id'])
+    if owner_member:
+        await text_channel.set_permissions(
+            owner_member,
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True
+        )
+
+    if previous_owner_id and previous_owner_id != room_data['owner_id']:
+        previous_owner = guild.get_member(previous_owner_id)
+        if previous_owner:
+            await text_channel.set_permissions(previous_owner, overwrite=None)
+
+    bot_member = guild.me
+    if bot_member:
+        await text_channel.set_permissions(
+            bot_member,
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True,
+            manage_messages=True
+        )
+
+
 class VocTempUserModal(discord.ui.Modal):
     def __init__(self, action: str, voice_channel_id: int):
         super().__init__(title=f"Voc Temp • {action}")
@@ -1781,6 +1820,8 @@ class VocTempUserModal(discord.ui.Modal):
             await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
             return
 
+        previous_owner_id = room_data['owner_id']
+
         if self.action == 'whitelist':
             room_data['whitelist'].add(target_id)
             room_data['blacklist'].discard(target_id)
@@ -1790,6 +1831,11 @@ class VocTempUserModal(discord.ui.Modal):
             room_data['whitelist'].discard(target_id)
             message = f"✅ <@{target_id}> ajouté à la liste noire."
         else:
+            target_member = interaction.guild.get_member(target_id)
+            if not target_member:
+                await interaction.response.send_message("❌ Ce membre n'est pas sur le serveur.", ephemeral=True)
+                return
+
             room_data['owner_id'] = target_id
             message = f"👑 Propriété transférée à <@{target_id}>."
 
@@ -1798,9 +1844,18 @@ class VocTempUserModal(discord.ui.Modal):
             await apply_voctemp_mode(channel, room_data)
             await apply_voctemp_toggles(channel, room_data)
             if self.action == 'owner':
-                target_member = interaction.guild.get_member(target_id)
-                if target_member:
-                    await channel.set_permissions(target_member, manage_channels=True, move_members=True)
+                await channel.set_permissions(target_member, manage_channels=True, move_members=True, connect=True, view_channel=True)
+                previous_owner = interaction.guild.get_member(previous_owner_id)
+                if previous_owner:
+                    await channel.set_permissions(previous_owner, manage_channels=False, move_members=False)
+
+        if self.action == 'owner':
+            await sync_voctemp_panel_access(interaction.guild, room_data, previous_owner_id=previous_owner_id)
+            if interaction.message:
+                new_owner = interaction.guild.get_member(room_data['owner_id'])
+                voice_channel = interaction.guild.get_channel(self.voice_channel_id)
+                if new_owner and voice_channel:
+                    await interaction.message.edit(embed=build_voctemp_embed(voice_channel, new_owner, room_data))
 
         await interaction.response.send_message(message, ephemeral=True)
 
@@ -2007,9 +2062,17 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             category=category,
             reason="Création voc temporaire"
         )
+        panel_overwrites = {
+            member.guild.default_role: discord.PermissionOverwrite(view_channel=False, read_message_history=False, send_messages=False),
+            member: discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True)
+        }
+        if member.guild.me:
+            panel_overwrites[member.guild.me] = discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True, manage_messages=True)
+
         text_channel = await member.guild.create_text_channel(
             name=f"panel-{member.display_name[:12].lower().replace(' ', '-')}",
             category=category,
+            overwrites=panel_overwrites,
             reason="Panel voc temporaire"
         )
 
@@ -2031,6 +2094,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         temp_voice_channels.add(temp_channel.id)
 
         await temp_channel.set_permissions(member, manage_channels=True, move_members=True, connect=True, view_channel=True)
+        await sync_voctemp_panel_access(member.guild, room_data)
         await member.move_to(temp_channel)
 
         embed = build_voctemp_embed(temp_channel, member, room_data)
