@@ -10,13 +10,10 @@ import io
 from dotenv import load_dotenv
 import re
 from deep_translator import GoogleTranslator
-
 load_dotenv()
-
 # Configuration du bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='/', intents=intents)
-
 # Stockage en mémoire des données
 guild_data = {}
 giveaways = {}
@@ -28,7 +25,6 @@ user_cooldowns = {}
 free_key_users = {}
 # NOUVEAU : Suivi temps réel de l'activité des tickets
 ticket_activity_tracker = {}  # {guild_id: {channel_id: {'last_activity': datetime, 'creator_id': int, 'warning_sent': bool, 'warning_message_id': int}}}
-
 def get_guild_data(guild_id):
     """Obtenir les données d'une guilde"""
     if guild_id not in guild_data:
@@ -51,6 +47,8 @@ def get_guild_data(guild_id):
                 'ticket_category': None,
                 'ticket_roles': [],
                 'ticket_logs_channel': None,
+                'ticket_category_map': {},
+                'ticket_ping_roles': [],
                 'key_cooldown': 60,
                 'key_roles': [],
                 'vouch_config': {
@@ -112,17 +110,13 @@ def get_guild_data(guild_id):
             'ticket_activity': {}
         }
     return guild_data[guild_id]
-
 def get_voice_member_count(guild: discord.Guild) -> int:
     """Compter les membres actuellement connectés dans des salons vocaux."""
     return sum(1 for member in guild.members if member.voice and member.voice.channel)
-
-
 async def update_counter_channel_names(guild: discord.Guild):
     """Mettre à jour les noms des salons compteurs membres / membres vocaux."""
     data = get_guild_data(guild.id)
     config = data['config']
-
     total_channel_id = config.get('seemember_channel_id')
     if total_channel_id:
         channel = guild.get_channel(total_channel_id)
@@ -133,7 +127,6 @@ async def update_counter_channel_names(guild: discord.Guild):
                     await channel.edit(name=expected, reason='Mise à jour compteur membres')
                 except Exception:
                     pass
-
     voice_channel_id = config.get('seemembervoc_channel_id')
     if voice_channel_id:
         channel = guild.get_channel(voice_channel_id)
@@ -145,8 +138,6 @@ async def update_counter_channel_names(guild: discord.Guild):
                     await channel.edit(name=expected, reason='Mise à jour compteur vocaux')
                 except Exception:
                     pass
-
-
 async def check_permissions(interaction: discord.Interaction) -> bool:
     """Vérifier les permissions et répondre si refusé"""
     if not is_admin_or_authorized(interaction):
@@ -158,7 +149,6 @@ async def check_permissions(interaction: discord.Interaction) -> bool:
         )
         return False
     return True
-
 def is_admin_or_authorized(interaction: discord.Interaction) -> bool:
     """Vérifier si l'utilisateur est admin ou a un rôle autorisé"""
     # Si admin, toujours autorisé
@@ -171,7 +161,6 @@ def is_admin_or_authorized(interaction: discord.Interaction) -> bool:
     
     user_roles = [role.id for role in interaction.user.roles]
     return any(role_id in user_roles for role_id in allowed_roles)
-
 def update_ticket_activity(guild_id, channel_id, creator_id):
     """Mettre à jour l'activité d'un ticket"""
     if guild_id not in ticket_activity_tracker:
@@ -185,7 +174,6 @@ def update_ticket_activity(guild_id, channel_id, creator_id):
         'extensions': 0  # Nombre de fois que le ticket a été gardé ouvert
     }
     print(f"[INACTIVITY] Activité mise à jour pour ticket {channel_id}")
-
 def get_ticket_inactivity_hours(guild_id, channel_id):
     """Obtenir le nombre d'heures d'inactivité d'un ticket"""
     if guild_id not in ticket_activity_tracker:
@@ -197,14 +185,12 @@ def get_ticket_inactivity_hours(guild_id, channel_id):
     delta = datetime.now() - last_activity
     hours = delta.total_seconds() / 3600
     return round(hours, 1)
-
 def remove_ticket_from_tracker(guild_id, channel_id):
     """Retirer un ticket du suivi d'activité"""
     if guild_id in ticket_activity_tracker:
         if channel_id in ticket_activity_tracker[guild_id]:
             del ticket_activity_tracker[guild_id][channel_id]
             print(f"[INACTIVITY] Ticket {channel_id} retiré du suivi")
-
 def create_key_embed(guild_id):
     """Créer l'embed des keys promoteur avec la configuration sauvegardée"""
     data = get_guild_data(guild_id)
@@ -229,7 +215,6 @@ def create_key_embed(guild_id):
         embed.set_image(url=embed_config['image_url'])
     
     return embed
-
 def create_freekey_embed(guild_id):
     """Créer l'embed des free keys avec la configuration sauvegardée"""
     data = get_guild_data(guild_id)
@@ -254,25 +239,21 @@ def create_freekey_embed(guild_id):
         embed.set_image(url=embed_config['image_url'])
     
     return embed
-
 def clean_category_name(category_name):
     """Nettoyer le nom de catégorie pour l'utiliser dans le nom du salon"""
     clean_name = re.sub(r'[^\w\s-]', '', category_name).strip()
     clean_name = re.sub(r'\s+', '-', clean_name).lower()
     return clean_name[:15]  # Limiter à 15 caractères
-
 def clean_username(username):
     """Nettoyer le nom d'utilisateur pour l'utiliser dans le nom du salon"""
     clean_name = re.sub(r'[^\w\s-]', '', username).strip()
     clean_name = re.sub(r'\s+', '-', clean_name).lower()
     return clean_name[:10]  # Limiter à 10 caractères
-
 def get_next_ticket_number(guild_id):
     """Obtenir le prochain numéro de ticket"""
     data = get_guild_data(guild_id)
     data['ticket_counter'] += 1
     return data['ticket_counter']
-
 def get_category_display_name(guild_id, category_key):
     """Obtenir le nom d'affichage d'une catégorie"""
     data = get_guild_data(guild_id)
@@ -288,7 +269,6 @@ def get_category_display_name(guild_id, category_key):
         'other': 'Autre'
     }
     return fallback_names.get(category_key, category_key)
-
 def create_ticket_embed(guild_id):
     """Créer l'embed des tickets avec la configuration sauvegardée"""
     data = get_guild_data(guild_id)
@@ -312,7 +292,6 @@ def create_ticket_embed(guild_id):
         embed.set_thumbnail(url=embed_config['thumbnail_url'])
     
     return embed
-
 def refresh_ticket_categories(guild_id):
     """Fonction pour rafraîchir et valider les catégories de tickets"""
     data = get_guild_data(guild_id)
@@ -331,7 +310,6 @@ def refresh_ticket_categories(guild_id):
             categories[key] = default_data
     
     return categories
-
 def create_ticket_options(guild_id):
     """Créer les options pour le sélecteur de tickets avec les catégories à jour"""
     categories = refresh_ticket_categories(guild_id)
@@ -350,7 +328,21 @@ def create_ticket_options(guild_id):
         ))
     
     return options
-
+def get_ticket_target_category(guild: discord.Guild, category_key: str):
+    """Retourner la catégorie Discord cible pour une catégorie de ticket donnée."""
+    data = get_guild_data(guild.id)
+    config = data['config']
+    mapped_category_id = config.get('ticket_category_map', {}).get(category_key)
+    if mapped_category_id:
+        mapped = guild.get_channel(mapped_category_id)
+        if isinstance(mapped, discord.CategoryChannel):
+            return mapped
+    fallback_id = config.get('ticket_category')
+    if fallback_id:
+        fallback = guild.get_channel(fallback_id)
+        if isinstance(fallback, discord.CategoryChannel):
+            return fallback
+    return None
 async def create_ticket_transcript(channel):
     """Créer un transcript complet du ticket"""
     messages_list = []
@@ -383,7 +375,6 @@ async def create_ticket_transcript(channel):
     # Créer le transcript
     transcript = "\n".join(messages_list)
     return transcript
-
 async def send_ticket_log(guild, channel_name, ticket_info, transcript, closed_by):
     """Envoyer les logs du ticket dans le salon dédié"""
     data = get_guild_data(guild.id)
@@ -424,7 +415,6 @@ async def send_ticket_log(guild, channel_name, ticket_info, transcript, closed_b
     except Exception as e:
         print(f"Erreur lors de l'envoi du log: {e}")
         return None
-
 @bot.event
 async def on_ready():
     print(f'{bot.user} est connecté!')
@@ -474,13 +464,10 @@ async def on_member_join(member):
                 await channel.send(message)
         except:
             pass
-
 @bot.event
 async def on_member_remove(member):
     """Mise à jour des compteurs à chaque départ."""
     await update_counter_channel_names(member.guild)
-
-
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -541,7 +528,6 @@ async def on_message(message):
                         ticket_activity_tracker[guild_id][message.channel.id]['warning_message_id'] = None
     
     await bot.process_commands(message)
-
 async def handle_automod_action(message, action, reason):
     """Gère les actions d'auto-modération"""
     try:
@@ -558,7 +544,6 @@ async def handle_automod_action(message, action, reason):
             await message.channel.send(f"🔨 {message.author} a été banni pour : {reason}", delete_after=5)
     except:
         pass
-
 async def add_warning(member, guild, reason):
     """Ajouter un avertissement"""
     guild_id = guild.id
@@ -575,7 +560,6 @@ async def add_warning(member, guild, reason):
         'moderator': 'Auto-Modération'
     }
     warnings[guild_id][user_id].append(warning)
-
 async def handle_sticky_message(message):
     """Gère les messages sticky"""
     guild_id = message.guild.id
@@ -600,7 +584,6 @@ async def handle_sticky_message(message):
                 sticky_messages[guild_id][channel_id]['message_id'] = new_message.id
             except:
                 pass
-
 @tasks.loop(minutes=1)
 async def cleanup_temp_voice():
     """Nettoie les salons vocaux temporaires vides"""
@@ -618,7 +601,6 @@ async def cleanup_temp_voice():
     # Retirer les channels supprimés ou en erreur
     for channel_id in to_remove:
         temp_voice_channels.discard(channel_id)
-
 async def log_action(guild, action, target, moderator, reason):
     """Enregistre une action dans les logs"""
     data = get_guild_data(guild.id)
@@ -637,7 +619,6 @@ async def log_action(guild, action, target, moderator, reason):
                 await channel.send(embed=embed)
         except:
             pass
-
 @tasks.loop(hours=1)
 async def check_ticket_inactivity():
     """Vérifier l'inactivité des tickets toutes les heures"""
@@ -834,14 +815,12 @@ async def check_ticket_inactivity():
                     print(f"[INACTIVITY] ❌ Erreur envoi avertissement: {e}")
     
     print("[INACTIVITY] ========== Fin de la vérification ==========\n")
-
 # COMMANDES GIVEAWAYS
 @bot.tree.command(name="gcreate", description="Créer un giveaway avec panneau interactif")
 async def gcreate(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
     await interaction.response.send_modal(GiveawayModal())
-
 @bot.tree.command(name="greroll", description="Relancer un giveaway")
 @app_commands.describe(message_id="ID du message du giveaway")
 async def greroll(interaction: discord.Interaction, message_id: str):
@@ -857,7 +836,6 @@ async def greroll(interaction: discord.Interaction, message_id: str):
             await interaction.response.send_message("❌ Giveaway introuvable ou aucun participant!", ephemeral=True)
     except: 
         await interaction.response.send_message("❌ ID invalide!", ephemeral=True)
-
 @bot.tree.command(name="glist", description="Lister les giveaways actifs")
 async def glist(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -870,7 +848,6 @@ async def glist(interaction: discord.Interaction):
     for g in active[:10]:
         embed.add_field(name=f"🎁 {g['prize']}", value=f"Participants: {len(g['participants'])}\nFin: <t:{int(g['end_time'].timestamp())}:R>", inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="gend", description="Terminer un giveaway prématurément")
 @app_commands.describe(message_id="ID du message du giveaway")
 async def gend(interaction: discord.Interaction, message_id: str):
@@ -891,7 +868,6 @@ async def gend(interaction: discord.Interaction, message_id: str):
             await interaction.response.send_message("❌ Giveaway introuvable!", ephemeral=True)
     except: 
         await interaction.response.send_message("❌ ID invalide!", ephemeral=True)
-
 @bot.tree.command(name="gdelete", description="Supprimer un giveaway")
 @app_commands.describe(message_id="ID du message du giveaway")
 async def gdelete(interaction: discord.Interaction, message_id: str):
@@ -906,7 +882,6 @@ async def gdelete(interaction: discord.Interaction, message_id: str):
             await interaction.response.send_message("❌ Introuvable!", ephemeral=True)
     except: 
         await interaction.response.send_message("❌ ID invalide!", ephemeral=True)
-
 # COMMANDES MODÉRATION
 @bot.tree.command(name="ban", description="Bannir un membre")
 @app_commands.describe(member="Membre à bannir", reason="Raison du bannissement")
@@ -921,7 +896,6 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
         await log_action(interaction.guild, "BAN", member, interaction.user, reason)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="kick", description="Exclure un membre")
 @app_commands.describe(member="Membre à exclure", reason="Raison de l'exclusion")
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "Aucune raison"):
@@ -935,7 +909,6 @@ async def kick(interaction: discord.Interaction, member: discord.Member, reason:
         await log_action(interaction.guild, "KICK", member, interaction.user, reason)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="mute", description="Rendre muet un membre")
 @app_commands.describe(member="Membre à rendre muet", duration="Durée en minutes", reason="Raison du mute")
 async def mute(interaction: discord.Interaction, member: discord.Member, duration: int, reason: str = "Aucune raison"):
@@ -950,7 +923,6 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         await log_action(interaction.guild, "MUTE", member, interaction.user, f"{reason} ({duration}min)")
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="unmute", description="Enlever le mute")
 @app_commands.describe(member="Membre à démuter")
 async def unmute(interaction: discord.Interaction, member: discord.Member):
@@ -964,7 +936,6 @@ async def unmute(interaction: discord.Interaction, member: discord.Member):
         await log_action(interaction.guild, "UNMUTE", member, interaction.user, "Démute")
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="unban", description="Débannir un utilisateur")
 @app_commands.describe(user_id="ID de l'utilisateur à débannir")
 async def unban(interaction: discord.Interaction, user_id: str):
@@ -978,7 +949,6 @@ async def unban(interaction: discord.Interaction, user_id: str):
         await log_action(interaction.guild, "UNBAN", user, interaction.user, "Débannissement")
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="clear", description="Supprimer des messages")
 @app_commands.describe(amount="Nombre de messages à supprimer")
 async def clear(interaction: discord.Interaction, amount: int):
@@ -991,7 +961,6 @@ async def clear(interaction: discord.Interaction, amount: int):
         await log_action(interaction.guild, "CLEAR", interaction.channel, interaction.user, f"{len(deleted)} messages")
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="warn", description="Donner un avertissement")
 @app_commands.describe(member="Membre à avertir", reason="Raison de l'avertissement")
 async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
@@ -1011,7 +980,6 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     embed = discord.Embed(title="⚠️ Avertissement", description=f"**Membre:** {member.mention}\n**Raison:** {reason}\n**Modérateur:** {interaction.user.mention}\n**Total warnings:** {len(warnings[guild_id][user_id])}", color=0xffaa00)
     await interaction.response.send_message(embed=embed)
     await log_action(interaction.guild, "WARN", member, interaction.user, reason)
-
 @bot.tree.command(name="clearwarnings", description="Effacer les avertissements")
 @app_commands.describe(member="Membre dont effacer les avertissements")
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
@@ -1025,7 +993,6 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
         await interaction.response.send_message(f"✅ Avertissements de {member.mention} effacés!")
     else:
         await interaction.response.send_message("❌ Aucun avertissement trouvé!", ephemeral=True)
-
 @bot.tree.command(name="nuke", description="Supprimer tous les messages du salon")
 async def nuke(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_channels:
@@ -1042,7 +1009,6 @@ async def nuke(interaction: discord.Interaction):
     
     embed = discord.Embed(title="💥 SALON NUKÉD", description=f"Salon recréé par {interaction.user.mention}", color=0xff0000)
     await new_channel.send(embed=embed)
-
 @bot.tree.command(name="locksalon", description="Verrouiller un salon")
 @app_commands.describe(channel="Salon à verrouiller")
 async def locksalon(interaction: discord.Interaction, channel: discord.TextChannel = None):
@@ -1059,7 +1025,6 @@ async def locksalon(interaction: discord.Interaction, channel: discord.TextChann
     
     embed = discord.Embed(title="🔒 Salon Verrouillé", description=f"**Salon:** {channel.mention}\n**Par:** {interaction.user.mention}", color=0xff0000)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="unlocksalon", description="Déverrouiller un salon")
 @app_commands.describe(channel="Salon à déverrouiller")
 async def unlocksalon(interaction: discord.Interaction, channel: discord.TextChannel = None):
@@ -1076,11 +1041,9 @@ async def unlocksalon(interaction: discord.Interaction, channel: discord.TextCha
     
     embed = discord.Embed(title="🔓 Salon Déverrouillé", description=f"**Salon:** {channel.mention}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="embed", description="Créer un embed avec panneau interactif")
 async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(EmbedModalComplete())
-
 @bot.tree.command(name="slowmode", description="Configurer le mode lent")
 @app_commands.describe(seconds="Délai en secondes", channel="Salon à configurer")
 async def slowmode(interaction: discord.Interaction, seconds: int, channel: discord.TextChannel = None):
@@ -1094,7 +1057,6 @@ async def slowmode(interaction: discord.Interaction, seconds: int, channel: disc
     await channel.edit(slowmode_delay=seconds)
     embed = discord.Embed(title="🐌 Mode Lent Activé", description=f"**Salon:** {channel.mention}\n**Délai:** {seconds}s\n**Par:** {interaction.user.mention}", color=0xffaa00)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="removeslowmode", description="Supprimer le mode lent")
 @app_commands.describe(channel="Salon à configurer")
 async def removeslowmode(interaction: discord.Interaction, channel: discord.TextChannel = None):
@@ -1108,7 +1070,6 @@ async def removeslowmode(interaction: discord.Interaction, channel: discord.Text
     await channel.edit(slowmode_delay=0)
     embed = discord.Embed(title="🚀 Mode Lent Désactivé", description=f"**Salon:** {channel.mention}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="massban", description="Bannissement en masse (nécessite fichier .txt)")
 @app_commands.describe(reason="Raison du bannissement")
 async def massban(interaction: discord.Interaction, reason: str = "Bannissement en masse"):
@@ -1117,7 +1078,6 @@ async def massban(interaction: discord.Interaction, reason: str = "Bannissement 
         return
     
     await interaction.response.send_message("📄 Veuillez joindre un fichier .txt avec les IDs utilisateurs (un par ligne)", ephemeral=True)
-
 # AUTO-MODÉRATION
 @bot.tree.command(name="automod", description="Configurer l'auto-modération générale")
 @app_commands.describe(status="Activer ou désactiver l'auto-modération")
@@ -1129,7 +1089,6 @@ async def automod(interaction: discord.Interaction, status: bool):
     
     embed = discord.Embed(title="🛡️ Auto-Modération", description=f"**Status:** {'✅ Activé' if status else '❌ Désactivé'}\n**Par:** {interaction.user.mention}", color=0xa30174 if status else 0xff0000)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="antilink_config", description="Configurer l'anti-lien")
 @app_commands.describe(status="on/off", action="warn/kick/ban")
 async def antilink_config(interaction: discord.Interaction, status: str, action: str):
@@ -1140,7 +1099,6 @@ async def antilink_config(interaction: discord.Interaction, status: str, action:
     
     embed = discord.Embed(title="🔗 Anti-Lien Configuré", description=f"**Status:** {'✅ Activé' if status.lower() == 'on' else '❌ Désactivé'}\n**Action:** {action}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="antispam_config", description="Configurer l'anti-spam")
 @app_commands.describe(status="on/off", action="warn/kick/ban")
 async def antispam_config(interaction: discord.Interaction, status: str, action: str):
@@ -1151,7 +1109,6 @@ async def antispam_config(interaction: discord.Interaction, status: str, action:
     
     embed = discord.Embed(title="🚫 Anti-Spam Configuré", description=f"**Status:** {'✅ Activé' if status.lower() == 'on' else '❌ Désactivé'}\n**Action:** {action}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="antiraid_config", description="Configurer l'anti-raid")
 @app_commands.describe(status="on/off", action="warn/kick/ban")
 async def antiraid_config(interaction: discord.Interaction, status: str, action: str):
@@ -1162,7 +1119,6 @@ async def antiraid_config(interaction: discord.Interaction, status: str, action:
     
     embed = discord.Embed(title="🛡️ Anti-Raid Configuré", description=f"**Status:** {'✅ Activé' if status.lower() == 'on' else '❌ Désactivé'}\n**Action:** {action}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="antilink", description="Activer/désactiver l'anti-lien")
 @app_commands.describe(status="True/False")
 async def antilink(interaction: discord.Interaction, status: bool):
@@ -1173,7 +1129,6 @@ async def antilink(interaction: discord.Interaction, status: bool):
     
     embed = discord.Embed(title="🔗 Anti-Lien", description=f"**Status:** {'✅ Activé' if status else '❌ Désactivé'}\n**Par:** {interaction.user.mention}", color=0xa30174 if status else 0xff0000)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="antilinkaction", description="Configurer l'action anti-lien")
 @app_commands.describe(action="warn/kick/ban")
 async def antilinkaction(interaction: discord.Interaction, action: str):
@@ -1184,7 +1139,6 @@ async def antilinkaction(interaction: discord.Interaction, action: str):
     
     embed = discord.Embed(title="🔗 Action Anti-Lien", description=f"**Action:** {action}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="whitelist_add", description="Ajouter un domaine autorisé")
 @app_commands.describe(domain="Domaine à ajouter (ex: youtube.com)")
 async def whitelist_add(interaction: discord.Interaction, domain: str):
@@ -1196,7 +1150,6 @@ async def whitelist_add(interaction: discord.Interaction, domain: str):
         await interaction.response.send_message(f"✅ Domaine `{domain}` ajouté à la liste blanche!")
     else:
         await interaction.response.send_message(f"❌ Domaine `{domain}` déjà dans la liste!", ephemeral=True)
-
 @bot.tree.command(name="whitelist_remove", description="Retirer un domaine autorisé")
 @app_commands.describe(domain="Domaine à retirer")
 async def whitelist_remove(interaction: discord.Interaction, domain: str):
@@ -1208,7 +1161,6 @@ async def whitelist_remove(interaction: discord.Interaction, domain: str):
         await interaction.response.send_message(f"✅ Domaine `{domain}` retiré de la liste blanche!")
     else:
         await interaction.response.send_message(f"❌ Domaine `{domain}` introuvable!", ephemeral=True)
-
 @bot.tree.command(name="whitelist_list", description="Voir la liste blanche des domaines")
 async def whitelist_list(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1219,7 +1171,6 @@ async def whitelist_list(interaction: discord.Interaction):
     embed = discord.Embed(title="📋 Liste Blanche des Domaines", color=0xa30174)
     embed.description = "\n".join([f"• {domain}" for domain in domains]) or "Aucun domaine"
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="badwordaction", description="Configurer l'action pour les mots interdits")
 @app_commands.describe(action="warn/kick/ban")
 async def badwordaction(interaction: discord.Interaction, action: str):
@@ -1230,7 +1181,6 @@ async def badwordaction(interaction: discord.Interaction, action: str):
     
     embed = discord.Embed(title="🚫 Action Mots Interdits", description=f"**Action:** {action}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="addword", description="Ajouter un mot interdit")
 @app_commands.describe(word="Mot à interdire")
 async def addword(interaction: discord.Interaction, word: str):
@@ -1242,7 +1192,6 @@ async def addword(interaction: discord.Interaction, word: str):
         await interaction.response.send_message(f"✅ Mot `{word}` ajouté aux mots interdits!")
     else:
         await interaction.response.send_message(f"❌ Mot `{word}` déjà interdit!", ephemeral=True)
-
 @bot.tree.command(name="removeword", description="Retirer un mot interdit")
 @app_commands.describe(word="Mot à autoriser")
 async def removeword(interaction: discord.Interaction, word: str):
@@ -1254,7 +1203,6 @@ async def removeword(interaction: discord.Interaction, word: str):
         await interaction.response.send_message(f"✅ Mot `{word}` retiré des mots interdits!")
     else:
         await interaction.response.send_message(f"❌ Mot `{word}` introuvable!", ephemeral=True)
-
 # GESTION RÔLES
 @bot.tree.command(name="autorole", description="Configurer le rôle automatique pour les nouveaux membres")
 @app_commands.describe(role="Rôle à donner automatiquement")
@@ -1266,7 +1214,6 @@ async def autorole(interaction: discord.Interaction, role: discord.Role):
     
     embed = discord.Embed(title="🎭 Autorôle Configuré", description=f"**Rôle:** {role.mention}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="autorole_remove", description="Supprimer l'autorôle")
 async def autorole_remove(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1276,7 +1223,6 @@ async def autorole_remove(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🎭 Autorôle Supprimé", description=f"**Par:** {interaction.user.mention}", color=0xff0000)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="addrole", description="Ajouter un rôle à un membre")
 @app_commands.describe(member="Membre", role="Rôle à ajouter")
 async def addrole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
@@ -1290,7 +1236,6 @@ async def addrole(interaction: discord.Interaction, member: discord.Member, role
         await interaction.response.send_message(embed=embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 @bot.tree.command(name="removerole", description="Retirer un rôle à un membre")
 @app_commands.describe(member="Membre", role="Rôle à retirer")
 async def removerole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
@@ -1304,7 +1249,6 @@ async def removerole(interaction: discord.Interaction, member: discord.Member, r
         await interaction.response.send_message(embed=embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
 # INFORMATIONS
 @bot.tree.command(name="userinfo", description="Afficher les informations d'un utilisateur")
 @app_commands.describe(member="Membre à analyser")
@@ -1327,7 +1271,6 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member = No
     embed.add_field(name="⚠️ Avertissements", value=warning_count, inline=True)
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="serverinfo", description="Afficher les informations du serveur")
 async def serverinfo(interaction: discord.Interaction):
     guild = interaction.guild
@@ -1345,7 +1288,6 @@ async def serverinfo(interaction: discord.Interaction):
     embed.add_field(name="🚀 Niveau Boost", value=guild.premium_tier, inline=True)
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="warnings", description="Voir les avertissements d'un membre")
 @app_commands.describe(member="Membre à vérifier")
 async def warnings_cmd(interaction: discord.Interaction, member: discord.Member = None):
@@ -1368,7 +1310,6 @@ async def warnings_cmd(interaction: discord.Interaction, member: discord.Member 
             )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="listwords", description="Voir la liste des mots interdits (en privé)")
 async def listwords(interaction: discord.Interaction):
     data = get_guild_data(interaction.guild.id)
@@ -1386,7 +1327,6 @@ async def listwords(interaction: discord.Interaction):
         await interaction.response.send_message("📧 Liste envoyée en privé!", ephemeral=True)
     except:
         await interaction.response.send_message("❌ Impossible d'envoyer en privé! DM fermés?", ephemeral=True)
-
 # CONFIGURATION
 @bot.tree.command(name="config", description="Voir la configuration complète du bot")
 async def config(interaction: discord.Interaction):
@@ -1423,7 +1363,6 @@ async def config(interaction: discord.Interaction):
     embed.add_field(name="👋 Bienvenue", value=welcome_ch, inline=True)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="setlogs", description="Configurer le salon de logs")
 @app_commands.describe(channel="Salon pour les logs")
 async def setlogs(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -1434,7 +1373,6 @@ async def setlogs(interaction: discord.Interaction, channel: discord.TextChannel
     
     embed = discord.Embed(title="📋 Salon de Logs Configuré", description=f"**Salon:** {channel.mention}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="setlogs_remove", description="Supprimer le salon de logs")
 async def setlogs_remove(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1444,7 +1382,6 @@ async def setlogs_remove(interaction: discord.Interaction):
     
     embed = discord.Embed(title="📋 Salon de Logs Supprimé", description=f"**Par:** {interaction.user.mention}", color=0xff0000)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="setrole", description="Configurer les rôles autorisés à utiliser le bot")
 @app_commands.describe(role="Rôle à autoriser")
 async def setrole(interaction: discord.Interaction, role: discord.Role):
@@ -1457,7 +1394,6 @@ async def setrole(interaction: discord.Interaction, role: discord.Role):
         await interaction.response.send_message(f"✅ Rôle {role.mention} ajouté aux autorisations!")
     else:
         await interaction.response.send_message(f"❌ Rôle {role.mention} déjà autorisé!", ephemeral=True)
-
 @bot.tree.command(name="unsetroles", description="Retirer un rôle des autorisations")
 @app_commands.describe(role="Rôle à retirer")
 async def unsetroles(interaction: discord.Interaction, role: discord.Role):
@@ -1470,7 +1406,6 @@ async def unsetroles(interaction: discord.Interaction, role: discord.Role):
         await interaction.response.send_message(f"✅ Rôle {role.mention} retiré des autorisations!")
     else:
         await interaction.response.send_message(f"❌ Rôle {role.mention} pas dans les autorisations!", ephemeral=True)
-
 # SYSTEME AUTO CLOSE TICKET
 @bot.tree.command(name="inactivity-enable", description="Activer/désactiver le système d'inactivité des tickets")
 @app_commands.describe(status="True pour activer, False pour désactiver")
@@ -1496,7 +1431,6 @@ async def inactivity_enable(interaction: discord.Interaction, status: bool):
         )
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="inactivity-delay", description="Définir le délai avant l'avertissement d'inactivité")
 @app_commands.describe(hours="Nombre d'heures d'inactivité avant l'avertissement (défaut: 24)")
 async def inactivity_delay(interaction: discord.Interaction, hours: int):
@@ -1524,7 +1458,6 @@ async def inactivity_delay(interaction: discord.Interaction, hours: int):
     )
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="inactivity-notify-staff", description="Activer/désactiver les notifications staff pour les tickets inactifs")
 @app_commands.describe(status="True pour activer, False pour désactiver")
 async def inactivity_notify_staff(interaction: discord.Interaction, status: bool):
@@ -1542,14 +1475,12 @@ async def inactivity_notify_staff(interaction: discord.Interaction, status: bool
     )
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="inactivity-customize", description="Personnaliser le message d'avertissement d'inactivité")
 async def inactivity_customize(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
     
     await interaction.response.send_modal(InactivityMessageModal())
-
 @bot.tree.command(name="inactivity-status", description="Voir la configuration et l'état du système d'inactivité")
 async def inactivity_status(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1608,7 +1539,6 @@ async def inactivity_status(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="inactivity-check", description="[ADMIN] Forcer la vérification d'inactivité maintenant")
 async def inactivity_check(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -1622,12 +1552,10 @@ async def inactivity_check(interaction: discord.Interaction):
     await check_ticket_inactivity()
     
     await interaction.followup.send("✅ Vérification d'inactivité effectuée !\nConsultez les logs pour voir les résultats.", ephemeral=True)
-
 # SYSTÈME DE VOUCHS
 @bot.tree.command(name="vouch", description="Laisser un avis client avec formulaire interactif")
 async def vouch(interaction: discord.Interaction):
     await interaction.response.send_modal(VouchModal())
-
 @bot.tree.command(name="modifembed", description="Personnaliser l'apparence des embeds de vouch")
 @app_commands.describe(titre="Titre de l'embed", couleur="Couleur hex", footer="Footer", thumbnail="Afficher avatar")
 async def modifembed(interaction: discord.Interaction, titre: str, couleur: str, footer: str, thumbnail: bool):
@@ -1653,7 +1581,6 @@ async def modifembed(interaction: discord.Interaction, titre: str, couleur: str,
     embed.add_field(name="Thumbnail", value="✅" if thumbnail else "❌", inline=True)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="resetcount", description="Remettre le compteur de vouchs à zéro")
 async def resetcount(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1663,7 +1590,6 @@ async def resetcount(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🔄 Compteur Reset", description=f"**Compteur de vouchs remis à 0**\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="configembed", description="Voir la configuration actuelle des vouchs")
 async def configembed(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1684,7 +1610,6 @@ async def configembed(interaction: discord.Interaction):
     embed.add_field(name="Compteur Actuel", value=data['vouch_count'], inline=True)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="stats", description="Afficher les statistiques complètes du serveur")
 async def stats(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -1708,7 +1633,6 @@ async def stats(interaction: discord.Interaction):
     embed.add_field(name="🔑 Clés", value=f"Promo: {len(data['keys'])}\nFree: {len(data['free_keys'])}", inline=True)
     
     await interaction.response.send_message(embed=embed)
-
 # SALONS VOCAUX
 @bot.tree.command(name="tempvoice", description="Créer un salon vocal temporaire")
 @app_commands.describe(name="Nom du salon", max_users="Limite d'utilisateurs (0 = illimité)")
@@ -1732,8 +1656,6 @@ async def tempvoice(interaction: discord.Interaction, name: str, max_users: int 
         
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
-
-
 def build_voctemp_embed(channel: discord.VoiceChannel, owner: discord.Member, room_data: dict) -> discord.Embed:
     mode_labels = {
         'open': '🔊 Ouvert',
@@ -1763,31 +1685,24 @@ def build_voctemp_embed(channel: discord.VoiceChannel, owner: discord.Member, ro
         inline=False
     )
     return embed
-
-
 async def apply_voctemp_mode(channel: discord.VoiceChannel, room_data: dict):
     guild = channel.guild
     everyone = guild.default_role
     mode = room_data['mode']
-
     if mode == 'open':
         await channel.set_permissions(everyone, view_channel=True, connect=True)
     elif mode == 'closed':
         await channel.set_permissions(everyone, view_channel=True, connect=False)
     else:
         await channel.set_permissions(everyone, view_channel=False, connect=False)
-
     for user_id in room_data['blacklist']:
         member = guild.get_member(user_id)
         if member:
             await channel.set_permissions(member, connect=False)
-
     for user_id in room_data['whitelist']:
         member = guild.get_member(user_id)
         if member:
             await channel.set_permissions(member, view_channel=True, connect=True)
-
-
 async def apply_voctemp_toggles(channel: discord.VoiceChannel, room_data: dict):
     everyone = channel.guild.default_role
     toggles = room_data['toggles']
@@ -1798,14 +1713,11 @@ async def apply_voctemp_toggles(channel: discord.VoiceChannel, room_data: dict):
         use_soundboard=toggles['soundboard'],
         use_voice_activation=toggles['status']
     )
-
-
 async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previous_owner_id: int = None):
     """Rendre le salon panel privé et visible uniquement par le propriétaire actuel."""
     text_channel = guild.get_channel(room_data['text_channel_id'])
     if not text_channel:
         return
-
     everyone = guild.default_role
     await text_channel.set_permissions(
         everyone,
@@ -1813,7 +1725,6 @@ async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previ
         read_message_history=False,
         send_messages=False
     )
-
     owner_member = guild.get_member(room_data['owner_id'])
     if owner_member:
         await text_channel.set_permissions(
@@ -1822,12 +1733,10 @@ async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previ
             read_message_history=True,
             send_messages=True
         )
-
     if previous_owner_id and previous_owner_id != room_data['owner_id']:
         previous_owner = guild.get_member(previous_owner_id)
         if previous_owner:
             await text_channel.set_permissions(previous_owner, overwrite=None)
-
     bot_member = guild.me
     if bot_member:
         await text_channel.set_permissions(
@@ -1837,8 +1746,6 @@ async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previ
             send_messages=True,
             manage_messages=True
         )
-
-
 class VocTempUserModal(discord.ui.Modal):
     def __init__(self, action: str, voice_channel_id: int):
         super().__init__(title=f"Voc Temp • {action}")
@@ -1846,25 +1753,20 @@ class VocTempUserModal(discord.ui.Modal):
         self.voice_channel_id = voice_channel_id
         self.user_id_input = discord.ui.TextInput(label="ID utilisateur", placeholder="123456789012345678", required=True)
         self.add_item(self.user_id_input)
-
     async def on_submit(self, interaction: discord.Interaction):
         room_data = voice_temp_rooms.get(self.voice_channel_id)
         if not room_data:
             await interaction.response.send_message("❌ Salon temporaire introuvable.", ephemeral=True)
             return
-
         if interaction.user.id != room_data['owner_id']:
             await interaction.response.send_message("❌ Seul le propriétaire peut gérer ce panel.", ephemeral=True)
             return
-
         try:
             target_id = int(str(self.user_id_input.value).strip())
         except ValueError:
             await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
             return
-
         previous_owner_id = room_data['owner_id']
-
         if self.action == 'whitelist':
             room_data['whitelist'].add(target_id)
             room_data['blacklist'].discard(target_id)
@@ -1878,10 +1780,8 @@ class VocTempUserModal(discord.ui.Modal):
             if not target_member:
                 await interaction.response.send_message("❌ Ce membre n'est pas sur le serveur.", ephemeral=True)
                 return
-
             room_data['owner_id'] = target_id
             message = f"👑 Propriété transférée à <@{target_id}>."
-
         channel = interaction.guild.get_channel(self.voice_channel_id)
         if channel:
             await apply_voctemp_mode(channel, room_data)
@@ -1891,7 +1791,6 @@ class VocTempUserModal(discord.ui.Modal):
                 previous_owner = interaction.guild.get_member(previous_owner_id)
                 if previous_owner:
                     await channel.set_permissions(previous_owner, manage_channels=False, move_members=False)
-
         if self.action == 'owner':
             await sync_voctemp_panel_access(interaction.guild, room_data, previous_owner_id=previous_owner_id)
             if interaction.message:
@@ -1899,49 +1798,36 @@ class VocTempUserModal(discord.ui.Modal):
                 voice_channel = interaction.guild.get_channel(self.voice_channel_id)
                 if new_owner and voice_channel:
                     await interaction.message.edit(embed=build_voctemp_embed(voice_channel, new_owner, room_data))
-
         await interaction.response.send_message(message, ephemeral=True)
-
-
 class VocTempSetupModal(discord.ui.Modal, title="Configuration /voctemp"):
     source_voice_id = discord.ui.TextInput(label="ID du salon vocal déclencheur", placeholder="123456789012345678", required=True)
-
     async def on_submit(self, interaction: discord.Interaction):
         if not await check_permissions(interaction):
             return
-
         try:
             channel_id = int(str(self.source_voice_id).strip())
         except ValueError:
             await interaction.response.send_message("❌ L'ID indiqué est invalide.", ephemeral=True)
             return
-
         channel = interaction.guild.get_channel(channel_id)
         if not isinstance(channel, discord.VoiceChannel):
             await interaction.response.send_message("❌ Ce salon n'est pas un salon vocal valide.", ephemeral=True)
             return
-
         data = get_guild_data(interaction.guild.id)
         data['config']['voctemp']['source_channel_id'] = channel_id
         await interaction.response.send_message(f"✅ Setup terminé. Salon déclencheur: {channel.mention}", ephemeral=True)
-
-
 class VocTempSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
-
     @discord.ui.button(label="Configurer l'ID vocal", style=discord.ButtonStyle.primary, emoji="🛠️")
     async def configure(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await check_permissions(interaction):
             return
         await interaction.response.send_modal(VocTempSetupModal())
-
-
 class VocTempPanelView(discord.ui.View):
     def __init__(self, voice_channel_id: int):
         super().__init__(timeout=None)
         self.voice_channel_id = voice_channel_id
-
     async def _owner_guard(self, interaction: discord.Interaction) -> bool:
         room_data = voice_temp_rooms.get(self.voice_channel_id)
         if not room_data:
@@ -1951,7 +1837,6 @@ class VocTempPanelView(discord.ui.View):
             await interaction.response.send_message("❌ Seul le propriétaire peut utiliser ce panel.", ephemeral=True)
             return False
         return True
-
     async def _refresh(self, interaction: discord.Interaction):
         channel = interaction.guild.get_channel(self.voice_channel_id)
         room_data = voice_temp_rooms.get(self.voice_channel_id)
@@ -1959,7 +1844,6 @@ class VocTempPanelView(discord.ui.View):
         if channel and room_data and owner:
             embed = build_voctemp_embed(channel, owner, room_data)
             await interaction.message.edit(embed=embed, view=self)
-
     @discord.ui.button(label="Ouvert", style=discord.ButtonStyle.success, emoji="🔊", row=0)
     async def mode_open(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -1970,7 +1854,6 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_mode(channel, room_data)
         await interaction.response.send_message("✅ Mode ouvert activé.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Fermé", style=discord.ButtonStyle.secondary, emoji="🔒", row=0)
     async def mode_closed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -1981,7 +1864,6 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_mode(channel, room_data)
         await interaction.response.send_message("✅ Mode fermé activé.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Privé", style=discord.ButtonStyle.secondary, emoji="📣", row=0)
     async def mode_private(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -1992,19 +1874,16 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_mode(channel, room_data)
         await interaction.response.send_message("✅ Mode privé activé.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Liste blanche", style=discord.ButtonStyle.primary, emoji="📝", row=1)
     async def whitelist(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
             return
         await interaction.response.send_modal(VocTempUserModal('whitelist', self.voice_channel_id))
-
     @discord.ui.button(label="Liste noire", style=discord.ButtonStyle.danger, emoji="📛", row=1)
     async def blacklist(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
             return
         await interaction.response.send_modal(VocTempUserModal('blacklist', self.voice_channel_id))
-
     @discord.ui.button(label="Purge", style=discord.ButtonStyle.danger, emoji="⤴️", row=1)
     async def purge(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -2016,7 +1895,6 @@ class VocTempPanelView(discord.ui.View):
             if member.id not in keepers:
                 await member.move_to(None, reason="Purge salon vocal temporaire")
         await interaction.response.send_message("✅ Purge effectuée.", ephemeral=True)
-
     @discord.ui.button(label="Micro", style=discord.ButtonStyle.secondary, emoji="🎙️", row=2)
     async def toggle_micro(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -2027,7 +1905,6 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_toggles(channel, room_data)
         await interaction.response.send_message("✅ Permission micro mise à jour.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Vidéo", style=discord.ButtonStyle.secondary, emoji="📹", row=2)
     async def toggle_video(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -2038,7 +1915,6 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_toggles(channel, room_data)
         await interaction.response.send_message("✅ Permission vidéo mise à jour.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Soundboards", style=discord.ButtonStyle.secondary, emoji="🎛️", row=2)
     async def toggle_soundboard(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -2049,7 +1925,6 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_toggles(channel, room_data)
         await interaction.response.send_message("✅ Permission soundboard mise à jour.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Statut", style=discord.ButtonStyle.secondary, emoji="📌", row=3)
     async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
@@ -2060,24 +1935,19 @@ class VocTempPanelView(discord.ui.View):
         await apply_voctemp_toggles(channel, room_data)
         await interaction.response.send_message("✅ Permission statut mise à jour.", ephemeral=True)
         await self._refresh(interaction)
-
     @discord.ui.button(label="Transférer la propriété", style=discord.ButtonStyle.primary, emoji="👑", row=4)
     async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_guard(interaction):
             return
         await interaction.response.send_modal(VocTempUserModal('owner', self.voice_channel_id))
-
-
 @bot.tree.command(name="voctemp", description="Configurer le système de salons vocaux temporaires")
 async def voctemp(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
-
     data = get_guild_data(interaction.guild.id)
     current_id = data['config']['voctemp'].get('source_channel_id')
     current_channel = interaction.guild.get_channel(current_id) if current_id else None
     current_text = current_channel.mention if current_channel else "Non configuré"
-
     embed = discord.Embed(
         title="🛠️ Setup Voc Temp",
         description=(
@@ -2088,16 +1958,12 @@ async def voctemp(interaction: discord.Interaction):
     )
     embed.add_field(name="Salon actuel", value=current_text, inline=False)
     await interaction.response.send_message(embed=embed, view=VocTempSetupView(), ephemeral=True)
-
-
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     if member.bot:
         return
-
     data = get_guild_data(member.guild.id)
     source_id = data['config']['voctemp'].get('source_channel_id')
-
     if source_id and after.channel and after.channel.id == source_id:
         category = after.channel.category
         temp_channel = await member.guild.create_voice_channel(
@@ -2111,14 +1977,12 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         }
         if member.guild.me:
             panel_overwrites[member.guild.me] = discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True, manage_messages=True)
-
         text_channel = await member.guild.create_text_channel(
             name=f"panel-{member.display_name[:12].lower().replace(' ', '-')}",
             category=category,
             overwrites=panel_overwrites,
             reason="Panel voc temporaire"
         )
-
         room_data = {
             'guild_id': member.guild.id,
             'owner_id': member.id,
@@ -2135,14 +1999,11 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         }
         voice_temp_rooms[temp_channel.id] = room_data
         temp_voice_channels.add(temp_channel.id)
-
         await temp_channel.set_permissions(member, manage_channels=True, move_members=True, connect=True, view_channel=True)
         await sync_voctemp_panel_access(member.guild, room_data)
         await member.move_to(temp_channel)
-
         embed = build_voctemp_embed(temp_channel, member, room_data)
         await text_channel.send(content=member.mention, embed=embed, view=VocTempPanelView(temp_channel.id))
-
     for channel in [before.channel]:
         if channel and channel.id in voice_temp_rooms and len(channel.members) == 0:
             room_data = voice_temp_rooms.pop(channel.id)
@@ -2157,9 +2018,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                     await text_channel.delete(reason="Suppression panel voc temporaire")
                 except:
                     pass
-
     await update_counter_channel_names(member.guild)
-
 class SeeMemberSetupModal(discord.ui.Modal):
     def __init__(self, mode: str):
         title = "Setup /seemember" if mode == 'members' else "Setup /seemembervoc"
@@ -2171,24 +2030,19 @@ class SeeMemberSetupModal(discord.ui.Modal):
             required=True
         )
         self.add_item(self.channel_id_input)
-
     async def on_submit(self, interaction: discord.Interaction):
         if not await check_permissions(interaction):
             return
-
         try:
             channel_id = int(str(self.channel_id_input.value).strip())
         except ValueError:
             await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
             return
-
         channel = interaction.guild.get_channel(channel_id)
         if not isinstance(channel, discord.VoiceChannel):
             await interaction.response.send_message("❌ Ce salon n'est pas un salon vocal valide.", ephemeral=True)
             return
-
         await channel.set_permissions(interaction.guild.default_role, view_channel=True, connect=False)
-
         data = get_guild_data(interaction.guild.id)
         if self.mode == 'members':
             data['config']['seemember_channel_id'] = channel.id
@@ -2198,60 +2052,44 @@ class SeeMemberSetupModal(discord.ui.Modal):
             data['config']['seemembervoc_channel_id'] = channel.id
             await channel.edit(name=f"🎙️ En vocal: {get_voice_member_count(interaction.guild)}")
             msg = f"✅ Setup /seemembervoc terminé sur {channel.mention}."
-
         await interaction.response.send_message(msg, ephemeral=True)
-
-
 class SeeMemberSetupView(discord.ui.View):
     def __init__(self, mode: str):
         super().__init__(timeout=180)
         self.mode = mode
-
     @discord.ui.button(label="Configurer l'ID vocal", style=discord.ButtonStyle.primary, emoji="🛠️")
     async def configure(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await check_permissions(interaction):
             return
         await interaction.response.send_modal(SeeMemberSetupModal(self.mode))
-
-
 @bot.tree.command(name="seemember", description="Configurer le salon vocal qui affiche le nombre total de membres")
 async def seemember(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
-
     data = get_guild_data(interaction.guild.id)
     channel_id = data['config'].get('seemember_channel_id')
     channel = interaction.guild.get_channel(channel_id) if channel_id else None
-
     embed = discord.Embed(
         title="🛠️ Setup /seemember",
         description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre total de membres.",
         color=0x5865f2
     )
     embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
-
     await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('members'), ephemeral=True)
-
-
 @bot.tree.command(name="seemembervoc", description="Configurer le salon vocal qui affiche le nombre de membres en vocal")
 async def seemembervoc(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
-
     data = get_guild_data(interaction.guild.id)
     channel_id = data['config'].get('seemembervoc_channel_id')
     channel = interaction.guild.get_channel(channel_id) if channel_id else None
-
     embed = discord.Embed(
         title="🛠️ Setup /seemembervoc",
         description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre de membres en vocal.",
         color=0x5865f2
     )
     embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
-
     await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('voice'), ephemeral=True)
-
-
 @bot.tree.command(name="welcome-set", description="Configurer le message de bienvenue pour les nouveaux membres")
 @app_commands.describe(channel="Salon de bienvenue", message="Message ({user} sera remplacé par la mention)")
 async def welcome_set(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
@@ -2263,7 +2101,6 @@ async def welcome_set(interaction: discord.Interaction, channel: discord.TextCha
     
     embed = discord.Embed(title="👋 Bienvenue Configuré", description=f"**Salon:** {channel.mention}\n**Message:** {message}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 # SONDAGES
 @bot.tree.command(name="poll", description="Créer un sondage avec réactions automatiques")
 @app_commands.describe(
@@ -2295,7 +2132,6 @@ async def poll(interaction: discord.Interaction, question: str, option1: str, op
     
     for i in range(len(options)):
         await msg.add_reaction(reactions[i])
-
 # SYSTÈME DE TICKETS
 @bot.tree.command(name="viewpanelticket", description="Afficher le panneau avec menu déroulant pour ouvrir les tickets")
 async def viewpanelticket(interaction: discord.Interaction):
@@ -2305,13 +2141,11 @@ async def viewpanelticket(interaction: discord.Interaction):
     embed = create_ticket_embed(interaction.guild.id)
     view = TicketPanelView(interaction.guild.id)
     await interaction.response.send_message(embed=embed, view=view)
-
 @bot.tree.command(name="custompanel", description="Personnaliser complètement l'embed du panneau ticket")
 async def custompanel(interaction: discord.Interaction):
     # Rafraîchir les catégories avant d'ouvrir le modal
     refresh_ticket_categories(interaction.guild.id)
     await interaction.response.send_modal(CustomPanelModal())
-
 @bot.tree.command(name="category", description="Modifier les catégories du menu des tickets")
 @app_commands.describe(
     action="add/edit/remove", 
@@ -2361,7 +2195,6 @@ async def category(interaction: discord.Interaction, action: str, nom: str, nouv
             await interaction.response.send_message(f"❌ Catégorie `{nom}` introuvable!", ephemeral=True)
     else:
         await interaction.response.send_message("❌ Action invalide! Utilisez: add, edit ou remove", ephemeral=True)
-
 @bot.tree.command(name="setroleticket", description="Ajouter/retirer des rôles autorisés pour voir les tickets")
 @app_commands.describe(role="Rôle à configurer", action="add/remove")
 async def setroleticket(interaction: discord.Interaction, role: discord.Role, action: str):
@@ -2383,7 +2216,6 @@ async def setroleticket(interaction: discord.Interaction, role: discord.Role, ac
             await interaction.response.send_message(f"✅ Rôle {role.mention} retiré des tickets!")
         else:
             await interaction.response.send_message(f"❌ Rôle pas dans la liste!", ephemeral=True)
-
 @bot.tree.command(name="setcategory", description="Définir la catégorie Discord où les tickets seront créés")
 @app_commands.describe(category="Catégorie Discord")
 async def setcategory(interaction: discord.Interaction, category: discord.CategoryChannel):
@@ -2395,7 +2227,95 @@ async def setcategory(interaction: discord.Interaction, category: discord.Catego
     
     embed = discord.Embed(title="🎫 Catégorie Tickets Configurée", description=f"**Catégorie:** {category.name}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
+@bot.tree.command(name="setticketroute", description="Associer une catégorie de ticket à une catégorie Discord")
+@app_commands.describe(ticket_key="Clé de la catégorie ticket (ex: owner, bug)", category="Catégorie Discord cible")
+async def setticketroute(interaction: discord.Interaction, ticket_key: str, category: discord.CategoryChannel):
+    if not await check_permissions(interaction):
+        return
+    data = get_guild_data(interaction.guild.id)
+    categories = refresh_ticket_categories(interaction.guild.id)
+    if ticket_key not in categories:
+        available = ', '.join(categories.keys())
+        await interaction.response.send_message(
+            f"❌ Catégorie ticket inconnue: `{ticket_key}`\nClés disponibles: {available}",
+            ephemeral=True
+        )
+        return
+    data['config'].setdefault('ticket_category_map', {})[ticket_key] = category.id
+    await interaction.response.send_message(
+        f"✅ Les tickets `{ticket_key}` iront maintenant dans **{category.name}**.",
+        ephemeral=True
+    )
+@bot.tree.command(name="resetticketroute", description="Retirer le routage d'une catégorie ticket")
+@app_commands.describe(ticket_key="Clé de la catégorie ticket")
+async def resetticketroute(interaction: discord.Interaction, ticket_key: str):
+    if not await check_permissions(interaction):
+        return
+    data = get_guild_data(interaction.guild.id)
+    mapping = data['config'].setdefault('ticket_category_map', {})
+    if ticket_key not in mapping:
+        await interaction.response.send_message("❌ Aucun routage trouvé pour cette catégorie.", ephemeral=True)
+        return
+    del mapping[ticket_key]
+    await interaction.response.send_message(f"✅ Routage retiré pour `{ticket_key}`.", ephemeral=True)
+@bot.tree.command(name="ticketroutes", description="Voir le routage des catégories de tickets")
+async def ticketroutes(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+    data = get_guild_data(interaction.guild.id)
+    categories = refresh_ticket_categories(interaction.guild.id)
+    mapping = data['config'].get('ticket_category_map', {})
+    lines = []
+    for key in categories.keys():
+        cat_id = mapping.get(key)
+        channel = interaction.guild.get_channel(cat_id) if cat_id else None
+        target = channel.mention if channel else "(fallback /setcategory)"
+        lines.append(f"• `{key}` → {target}")
+    embed = discord.Embed(title="🗂️ Routage des tickets", description="\n".join(lines) or "Aucun", color=0x5865f2)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+@bot.tree.command(name="setticketping", description="Configurer les rôles pingés à l'ouverture d'un ticket")
+@app_commands.describe(action="add/remove/clear", role="Rôle à ajouter/retirer")
+async def setticketping(interaction: discord.Interaction, action: str, role: discord.Role = None):
+    if not await check_permissions(interaction):
+        return
+    data = get_guild_data(interaction.guild.id)
+    ping_roles = data['config'].setdefault('ticket_ping_roles', [])
+    if action == 'add':
+        if not role:
+            await interaction.response.send_message("❌ Donne un rôle avec action add.", ephemeral=True)
+            return
+        if role.id in ping_roles:
+            await interaction.response.send_message("❌ Ce rôle est déjà dans la liste.", ephemeral=True)
+            return
+        ping_roles.append(role.id)
+        await interaction.response.send_message(f"✅ {role.mention} sera ping à l'ouverture des tickets.", ephemeral=True)
+    elif action == 'remove':
+        if not role:
+            await interaction.response.send_message("❌ Donne un rôle avec action remove.", ephemeral=True)
+            return
+        if role.id not in ping_roles:
+            await interaction.response.send_message("❌ Ce rôle n'est pas dans la liste.", ephemeral=True)
+            return
+        ping_roles.remove(role.id)
+        await interaction.response.send_message(f"✅ {role.mention} retiré des pings tickets.", ephemeral=True)
+    elif action == 'clear':
+        ping_roles.clear()
+        await interaction.response.send_message("✅ Tous les rôles de ping tickets ont été retirés.", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Action invalide: add/remove/clear", ephemeral=True)
+@bot.tree.command(name="viewticketping", description="Voir les rôles pingés à l'ouverture d'un ticket")
+async def viewticketping(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+    data = get_guild_data(interaction.guild.id)
+    roles = []
+    for role_id in data['config'].get('ticket_ping_roles', []):
+        role = interaction.guild.get_role(role_id)
+        if role:
+            roles.append(role.mention)
+    text = "\n".join(f"• {r}" for r in roles) if roles else "Aucun rôle configuré."
+    embed = discord.Embed(title="📣 Pings tickets", description=text, color=0x5865f2)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 @bot.tree.command(name="closeticket", description="Fermer un ticket (enlève les permissions d'écriture)")
 async def closeticket(interaction: discord.Interaction):
     if not interaction.channel.name.startswith('ticket-'):
@@ -2483,7 +2403,11 @@ async def configticket(interaction: discord.Interaction):
     
     system_info = f"**Catégorie Discord:** {f'<#{ticket_category_ch}>' if ticket_category_ch else '❌ Non configuré'}\n"
     system_info += f"**Salon de logs:** {f'<#{ticket_logs_ch}>' if ticket_logs_ch else '❌ Non configuré'}\n"
+    routes_count = len(data['config'].get('ticket_category_map', {}))
+    ping_count = len(data['config'].get('ticket_ping_roles', []))
     system_info += f"**Rôles autorisés:** {len(data['config']['ticket_roles'])}\n"
+    system_info += f"**Routages catégories:** {routes_count}\n"
+    system_info += f"**Rôles ping auto:** {ping_count}\n"
     system_info += f"**Total créés:** {data['ticket_counter']}"
     
     config_embed.add_field(
@@ -2499,7 +2423,6 @@ async def configticket(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=config_embed, ephemeral=True)
-
 @bot.tree.command(name="resetticket", description="Remettre la configuration tickets par défaut")
 async def resetticket(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -2535,7 +2458,6 @@ async def resetticket(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="ticketstats", description="Voir les statistiques des tickets du serveur")
 async def ticketstats(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -2583,7 +2505,6 @@ async def ticketstats(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="presetticket", description="Charger un preset d'embed pour les tickets")
 @app_commands.describe(preset="Choisir un preset : default, modern, elegant, gaming")
 async def presetticket(interaction: discord.Interaction, preset: str):
@@ -2641,7 +2562,6 @@ async def presetticket(interaction: discord.Interaction, preset: str):
         embed=embed, 
         view=view
     )
-
     # Rafraîchir les catégories
     categories = refresh_ticket_categories(interaction.guild.id)
     
@@ -2671,14 +2591,12 @@ async def presetticket(interaction: discord.Interaction, preset: str):
     )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
     # Retirer permissions d'écriture
     overwrites = interaction.channel.overwrites
     for target, overwrite in overwrites.items():
         if isinstance(target, discord.Member):
             overwrite.send_messages = False
             await interaction.channel.set_permissions(target, overwrite=overwrite)
-
 @bot.tree.command(name="setticketlogs", description="Définir le salon de logs pour les tickets")
 @app_commands.describe(channel="Salon où seront envoyés les logs des tickets")
 async def setticketlogs(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -2701,7 +2619,6 @@ async def setticketlogs(interaction: discord.Interaction, channel: discord.TextC
     )
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="removeticketlogs", description="Supprimer le salon de logs tickets")
 async def removeticketlogs(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -2722,7 +2639,6 @@ async def removeticketlogs(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="deleteticket", description="Supprimer complètement le salon ticket (avec transcript)")
 async def deleteticket(interaction: discord.Interaction):
     # Vérifier que c'est bien un ticket
@@ -2843,7 +2759,6 @@ async def deleteticket(interaction: discord.Interaction):
         print("[LOGS] ✅ Salon supprimé avec succès")
     except Exception as e:
         print(f"[LOGS] ❌ Erreur suppression salon: {e}")
-
 @bot.tree.command(name="openticket", description="Ouvrir un ticket manuellement pour un membre")
 @app_commands.describe(member="Membre pour qui ouvrir le ticket", category="Catégorie du ticket")
 async def openticket(interaction: discord.Interaction, member: discord.Member, category: str):
@@ -2856,12 +2771,10 @@ async def openticket(interaction: discord.Interaction, member: discord.Member, c
         return
     
     await create_ticket(interaction, member, category)
-
 @bot.tree.command(name="ticket-create", description="Créer un ticket dans une catégorie spécifique")
 @app_commands.describe(category="Catégorie du ticket")
 async def ticket_create(interaction: discord.Interaction, category: str):
     await create_ticket(interaction, interaction.user, category)
-
 @bot.tree.command(name="testlogs", description="[ADMIN] Tester le système de logs tickets")
 async def testlogs(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -2953,7 +2866,6 @@ async def testlogs(interaction: discord.Interaction):
         embed.color = 0xff0000
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 async def create_ticket(interaction, user, category_key):
     """Fonction pour créer un ticket avec nommage amélioré"""
     data = get_guild_data(interaction.guild.id)
@@ -2990,11 +2902,8 @@ async def create_ticket(interaction, user, category_key):
         if role:
             overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
     
-    # Obtenir la catégorie Discord pour les tickets
-    ticket_category = None
-    if data['config']['ticket_category']:
-        ticket_category = guild.get_channel(data['config']['ticket_category'])
-
+    # Obtenir la catégorie Discord cible (mapping par catégorie -> fallback global)
+    ticket_category = get_ticket_target_category(guild, category_key)
         # Créer le salon ticket
     try:
         # IMPORTANT: Ajouter l'ID utilisateur dans le topic pour pouvoir le retrouver facilement
@@ -3032,15 +2941,22 @@ async def create_ticket(interaction, user, category_key):
         inline=False
     )
     
+    # Ping modérateurs configurés + utilisateur
+    ping_roles = []
+    for role_id in data['config'].get('ticket_ping_roles', []):
+        role = guild.get_role(role_id)
+        if role:
+            ping_roles.append(role.mention)
+    ping_prefix = ' '.join(ping_roles)
+    opening_line = f"{ping_prefix} {user.mention} **|** Ticket #{ticket_number}".strip()
     # Envoyer le message initial dans le ticket
-    await channel.send(f"{user.mention} **|** Ticket #{ticket_number}", embed=embed, view=TicketControlView())
+    await channel.send(opening_line, embed=embed, view=TicketControlView())
     
     # Log de création du ticket
     await log_action(guild, "TICKET_CREATE", channel, user, f"Ticket #{ticket_number} créé - Catégorie: {category_display_name}")
     
     # Enregistrer l'activité initiale du ticket
     update_ticket_activity(guild.id, channel.id, user.id)
-
    # Répondre à l'interaction
     try:
         # Vérifier si l'interaction n'a pas déjà reçu de réponse
@@ -3056,7 +2972,6 @@ async def create_ticket(interaction, user, category_key):
             )
     except Exception as e:
         print(f"Erreur lors de l’envoi du message : {e}")
-
 # KEY PROMOTEUR
 @bot.tree.command(name="viewpanelkeypromot", description="Afficher le panel pour récupérer des clés promoteur")
 async def viewpanelkeypromot(interaction: discord.Interaction):
@@ -3068,16 +2983,12 @@ async def viewpanelkeypromot(interaction: discord.Interaction):
     button_label = data['config']['key_embed'].get('button_label', 'Récupérer Clé')
     view = KeyPromotView(button_label)
     await interaction.response.send_message(embed=embed, view=view)
-
-
-
 @bot.tree.command(name="custompanelkey", description="Personnaliser l'embed du panel key promoteur")
 async def custompanelkey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
     
     await interaction.response.send_modal(CustomKeyPanelModal())
-
 @bot.tree.command(name="addkey", description="Ajouter une ou plusieurs clés au stock (séparées par des espaces)")
 @app_commands.describe(keys="Clés à ajouter (séparées par des espaces)")
 async def addkey(interaction: discord.Interaction, keys: str):
@@ -3106,7 +3017,6 @@ async def addkey(interaction: discord.Interaction, keys: str):
     response_parts.append(f"📊 Stock total: {len(data['keys'])} clés")
     
     await interaction.response.send_message("\n".join(response_parts), ephemeral=True)
-
 @bot.tree.command(name="removekey", description="Supprimer une clé du stock")
 @app_commands.describe(key="Clé à supprimer")
 async def removekey(interaction: discord.Interaction, key: str):
@@ -3119,7 +3029,6 @@ async def removekey(interaction: discord.Interaction, key: str):
         await interaction.response.send_message(f"✅ Clé `{key}` supprimée! Stock: {len(data['keys'])}", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Clé `{key}` introuvable!", ephemeral=True)
-
 @bot.tree.command(name="stockkey", description="Voir le nombre de clés disponibles")
 async def stockkey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3129,7 +3038,6 @@ async def stockkey(interaction: discord.Interaction):
     
     embed = discord.Embed(title="📊 Stock Clés Promoteur", description=f"**Clés disponibles:** {len(data['keys'])}", color=0x0099ff)
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="setrolekey", description="Définir les rôles autorisés à récupérer des clés")
 @app_commands.describe(role="Rôle à autoriser")
 async def setrolekey(interaction: discord.Interaction, role: discord.Role):
@@ -3142,7 +3050,6 @@ async def setrolekey(interaction: discord.Interaction, role: discord.Role):
         await interaction.response.send_message(f"✅ Rôle {role.mention} autorisé pour les clés!")
     else:
         await interaction.response.send_message(f"❌ Rôle déjà autorisé!", ephemeral=True)
-
 @bot.tree.command(name="setcooldownkey", description="Définir le cooldown entre les récupérations de clés")
 @app_commands.describe(minutes="Cooldown en minutes")
 async def setcooldownkey(interaction: discord.Interaction, minutes: int):
@@ -3154,9 +3061,6 @@ async def setcooldownkey(interaction: discord.Interaction, minutes: int):
     
     embed = discord.Embed(title="⏰ Cooldown Clés Configuré", description=f"**Cooldown:** {minutes} minutes\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
-
-
 # COMMANDE /HELP avec menu déroulant (à ajouter après les autres commandes)
 @bot.tree.command(name="help", description="Afficher toutes les commandes disponibles par catégorie")
 async def help_command(interaction: discord.Interaction):
@@ -3175,13 +3079,11 @@ async def help_command(interaction: discord.Interaction):
     
     view = HelpView()
     await interaction.response.send_message(embed=embed, view=view)
-
 # VIEW POUR LE MENU D'AIDE
 class HelpView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)  # 5 minutes de timeout
         self.add_item(HelpSelect())
-
 class HelpSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -3271,7 +3173,6 @@ class HelpSelect(discord.ui.Select):
             )
         ]
         super().__init__(placeholder="Choisissez une catégorie...", options=options, row=0)
-
     async def callback(self, interaction: discord.Interaction):
         category = self.values[0]
         
@@ -3463,7 +3364,6 @@ class HelpSelect(discord.ui.Select):
                 value="• `/custompanelfreekey` **sauvegarde automatiquement**\n• `/viewpanelfreekey` **utilise la config sauvegardée**\n• **Parfaite synchronisation** entre les deux commandes",
                 inline=False
             ),
-
              "inactivity": discord.Embed(
                 title="⏰ Commandes Inactivité Tickets",
                 description="**6 commandes disponibles**",
@@ -3493,15 +3393,11 @@ class HelpSelect(discord.ui.Select):
 `/getsticks` - Voir tous les messages sticky du serveur
 `/setnamestick <nom>` - Modifier le nom du bot affiché dans les messages sticky
             """, inline=False)
-
             }
-
-
         embed = embeds.get(category)
         if embed:
             embed.set_footer(text="💡 Panels permanents : Tickets, Keys, Free Keys, Help | Bot créé par TEKAZ")
             await interaction.response.edit_message(embed=embed, view=self.view)
-
 # FREE KEY
 @bot.tree.command(name="viewpanelfreekey", description="Afficher le panel pour récupérer des clés gratuites")
 async def viewpanelfreekey(interaction: discord.Interaction):
@@ -3513,7 +3409,6 @@ async def viewpanelfreekey(interaction: discord.Interaction):
     button_label = data['config']['freekey_embed'].get('button_label', 'Récupérer Free Key')
     view = FreeKeyView(button_label)
     await interaction.response.send_message(embed=embed, view=view)
-
 @bot.tree.command(name="configfreekey", description="Voir la configuration actuelle du panel free key")
 async def configfreekey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3546,7 +3441,6 @@ async def configfreekey(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=config_embed, ephemeral=True)
-
 @bot.tree.command(name="resetfreekeyconfig", description="Remettre la configuration free key par défaut")
 async def resetfreekeyconfig(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3575,14 +3469,12 @@ async def resetfreekeyconfig(interaction: discord.Interaction):
     )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="custompanelfreekey", description="Personnaliser l'embed du panel free key")
 async def custompanelfreekey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
     
     await interaction.response.send_modal(CustomFreeKeyPanelModal())
-
 @bot.tree.command(name="addfreekey", description="Ajouter une ou plusieurs free keys au stock (séparées par des espaces)")
 @app_commands.describe(keys="Free keys à ajouter (séparées par des espaces)")
 async def addfreekey(interaction: discord.Interaction, keys: str):
@@ -3611,8 +3503,6 @@ async def addfreekey(interaction: discord.Interaction, keys: str):
     response_parts.append(f"📊 Stock total: {len(data['free_keys'])} free keys")
     
     await interaction.response.send_message("\n".join(response_parts), ephemeral=True)
-
-
 @bot.tree.command(name="removefreekey", description="Supprimer une free key du stock")
 @app_commands.describe(key="Free key à supprimer")
 async def removefreekey(interaction: discord.Interaction, key: str):
@@ -3625,7 +3515,6 @@ async def removefreekey(interaction: discord.Interaction, key: str):
         await interaction.response.send_message(f"✅ Free key `{key}` supprimée! Stock: {len(data['free_keys'])}", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Free key `{key}` introuvable!", ephemeral=True)
-
 @bot.tree.command(name="stockfreekey", description="Voir le stock de free keys")
 async def stockfreekey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3635,7 +3524,6 @@ async def stockfreekey(interaction: discord.Interaction):
     
     embed = discord.Embed(title="📊 Stock Free Keys", description=f"**Free keys disponibles:** {len(data['free_keys'])}", color=0xa30174)
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="resetfreekey", description="Reset la liste des utilisateurs ayant déjà pris une free key")
 async def resetfreekey(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3647,7 +3535,6 @@ async def resetfreekey(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🔄 Reset Free Keys", description="Tous les utilisateurs peuvent maintenant récupérer une nouvelle free key!", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 # STICKY MESSAGES
 @bot.tree.command(name="stick", description="Créer un message qui reste toujours en bas du salon")
 @app_commands.describe(message="Message qui restera collé en bas")
@@ -3685,7 +3572,6 @@ async def stick(interaction: discord.Interaction, message: str):
     }
     
     await interaction.followup.send("✅ Message sticky créé!", ephemeral=True)
-
 @bot.tree.command(name="stickstop", description="Arrêter temporairement le sticky dans le salon actuel")
 async def stickstop(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3698,7 +3584,6 @@ async def stickstop(interaction: discord.Interaction):
         await interaction.response.send_message("⏸️ Sticky message mis en pause!", ephemeral=True)
     else:
         await interaction.response.send_message("❌ Aucun sticky message dans ce salon!", ephemeral=True)
-
 @bot.tree.command(name="stickdelete", description="Supprimer complètement le sticky du salon")
 async def stickdelete(interaction: discord.Interaction):
     if not await check_permissions(interaction):
@@ -3719,7 +3604,6 @@ async def stickdelete(interaction: discord.Interaction):
         await interaction.response.send_message("🗑️ Sticky message supprimé!", ephemeral=True)
     else:
         await interaction.response.send_message("❌ Aucun sticky message dans ce salon!", ephemeral=True)
-
 @bot.tree.command(name="setnamestick", description="Modifier le nom du bot affiché dans les messages sticky")
 @app_commands.describe(nom="Nouveau nom à afficher")
 async def setnamestick(interaction: discord.Interaction, nom: str):
@@ -3734,7 +3618,6 @@ async def setnamestick(interaction: discord.Interaction, nom: str):
     
     embed = discord.Embed(title="🤖 Nom Bot Modifié", description=f"**Nouveau nom:** {nom}\n**Par:** {interaction.user.mention}", color=0xa30174)
     await interaction.response.send_message(embed=embed)
-
 # MODALS ET VIEWS
 class GiveawayModal(discord.ui.Modal, title='Créer un Giveaway'):
     prize = discord.ui.TextInput(label='Prix du Giveaway', placeholder='Ex: Nitro Discord')
@@ -3742,7 +3625,6 @@ class GiveawayModal(discord.ui.Modal, title='Créer un Giveaway'):
     winners = discord.ui.TextInput(label='Nombre de gagnants', placeholder='Ex: 1', default='1')
     description = discord.ui.TextInput(label='Description (optionnelle)', style=discord.TextStyle.paragraph, required=False)
     image_url = discord.ui.TextInput(label='Image URL (optionnelle)', required=False, max_length=500)
-
     async def on_submit(self, interaction: discord.Interaction):
         try:
             # Parsing de la durée
@@ -3792,7 +3674,6 @@ class GiveawayModal(discord.ui.Modal, title='Créer un Giveaway'):
             
         except ValueError:
             await interaction.response.send_message("❌ Durée ou nombre de gagnants invalide! Format de durée: 30m, 2h, 1d", ephemeral=True)
-
 class EmbedModalComplete(discord.ui.Modal, title='Créer un Embed'):
     title_field = discord.ui.TextInput(
         label='Titre', 
@@ -3824,7 +3705,6 @@ class EmbedModalComplete(discord.ui.Modal, title='Créer un Embed'):
         max_length=2048,
         placeholder='Texte en bas de l\'embed'
     )
-
     async def on_submit(self, interaction: discord.Interaction):
         try:
             # Convertir la couleur
@@ -3878,13 +3758,11 @@ class EmbedModalComplete(discord.ui.Modal, title='Créer un Embed'):
                 f"❌ Erreur lors de la création de l'embed: {str(e)}", 
                 ephemeral=True
             )
-
 class VouchModal(discord.ui.Modal, title='Laisser un Avis'):
     rating = discord.ui.TextInput(label='Note (/5)', placeholder='5')
     comment = discord.ui.TextInput(label='Commentaire', style=discord.TextStyle.paragraph, placeholder='Votre avis...')
     recommend = discord.ui.TextInput(label='Recommanderiez-vous? (oui/non)', placeholder='oui')
     image_url = discord.ui.TextInput(label='Image URL (optionnel)', required=False, max_length=500)
-
     async def on_submit(self, interaction: discord.Interaction):
         data = get_guild_data(interaction.guild.id)
         config = data['config']['vouch_config']
@@ -3911,7 +3789,6 @@ class VouchModal(discord.ui.Modal, title='Laisser un Avis'):
             embed.set_image(url=self.image_url.value)
         
         await interaction.response.send_message(embed=embed)
-
 class CustomKeyPanelModal(discord.ui.Modal):
     def __init__(self):
         super().__init__(title='Personnaliser Panel Key', timeout=300)
@@ -3926,7 +3803,6 @@ class CustomKeyPanelModal(discord.ui.Modal):
     button_label = discord.ui.TextInput(label='Nom du bouton', default='Récupérer Clé', max_length=80)
     color = discord.ui.TextInput(label='Couleur (hex)', default='#0099ff', max_length=7)
     image_url = discord.ui.TextInput(label='Image URL (optionnel)', required=False, max_length=500)
-
     async def on_submit(self, interaction: discord.Interaction):
         # SAUVEGARDER la configuration de l'embed
         data = get_guild_data(interaction.guild.id)
@@ -3948,7 +3824,6 @@ class CustomKeyPanelModal(discord.ui.Modal):
         
         # Confirmer la sauvegarde
         await interaction.followup.send("✅ Configuration de l'embed key promoteur sauvegardée! Elle sera utilisée par `/viewpanelkeypromot`", ephemeral=True)
-
 class CustomFreeKeyPanelModal(discord.ui.Modal):
     def __init__(self):
         super().__init__(title='Personnaliser Panel Free Key', timeout=300)
@@ -3963,7 +3838,6 @@ class CustomFreeKeyPanelModal(discord.ui.Modal):
     button_label = discord.ui.TextInput(label='Nom du bouton', default='Récupérer Free Key', max_length=80)
     color = discord.ui.TextInput(label='Couleur (hex)', default='#00ff00', max_length=7)
     image_url = discord.ui.TextInput(label='Image URL (optionnel)', required=False, max_length=500)
-
     async def on_submit(self, interaction: discord.Interaction):
         # SAUVEGARDER la configuration de l'embed
         data = get_guild_data(interaction.guild.id)
@@ -3985,7 +3859,6 @@ class CustomFreeKeyPanelModal(discord.ui.Modal):
         
         # Confirmer la sauvegarde
         await interaction.followup.send("✅ Configuration de l'embed free key sauvegardée! Elle sera utilisée par `/viewpanelfreekey`", ephemeral=True)
-
 class InactivityMessageModal(discord.ui.Modal, title='Personnaliser Message Inactivité'):
     title_field = discord.ui.TextInput(
         label='Titre',
@@ -4018,7 +3891,6 @@ class InactivityMessageModal(discord.ui.Modal, title='Personnaliser Message Inac
         default='🔒 Fermer le Ticket',
         max_length=80
     )
-
     async def on_submit(self, interaction: discord.Interaction):
         data = get_guild_data(interaction.guild.id)
         
@@ -4047,7 +3919,6 @@ class InactivityMessageModal(discord.ui.Modal, title='Personnaliser Message Inac
         preview.set_footer(text="Aperçu du message d'inactivité")
         
         await interaction.response.send_message("✅ **Message d'inactivité personnalisé !**\n\nAperçu :", embed=preview, ephemeral=True)
-
 class CustomPanelModal(discord.ui.Modal, title='Personnaliser Panel Ticket'):
     title_field = discord.ui.TextInput(label='Titre', default='🎫 Système de Tickets', max_length=256)
     description_field = discord.ui.TextInput(
@@ -4059,7 +3930,6 @@ class CustomPanelModal(discord.ui.Modal, title='Personnaliser Panel Ticket'):
     color = discord.ui.TextInput(label='Couleur (hex)', default='#a30174', max_length=7)
     image_url = discord.ui.TextInput(label='Image URL (optionnel)', required=False, max_length=500)
     thumbnail_url = discord.ui.TextInput(label='Thumbnail URL (optionnel)', required=False, max_length=500)
-
     async def on_submit(self, interaction: discord.Interaction):
         # SAUVEGARDER la configuration de l'embed
         data = get_guild_data(interaction.guild.id)
@@ -4080,7 +3950,6 @@ class CustomPanelModal(discord.ui.Modal, title='Personnaliser Panel Ticket'):
         
         # Confirmer la sauvegarde
         await interaction.followup.send("✅ Configuration de l'embed sauvegardée! Elle sera utilisée par `/viewpanelticket`", ephemeral=True)
-
 # VIEWS POUR LES PANELS PERMANENTS
 class TicketPanelView(discord.ui.View):
     def __init__(self, guild_id=None):
@@ -4091,7 +3960,6 @@ class TicketPanelView(discord.ui.View):
         else:
             # Fallback avec catégories par défaut si pas de guild_id
             self.add_item(TicketSelectDefault())
-
 class TicketSelect(discord.ui.Select):
     def __init__(self, guild_id):
         self.guild_id = guild_id
@@ -4100,10 +3968,8 @@ class TicketSelect(discord.ui.Select):
         options = create_ticket_options(guild_id)
         
         super().__init__(placeholder="Choisissez une catégorie...", options=options)
-
     async def callback(self, interaction: discord.Interaction):
         await create_ticket(interaction, interaction.user, self.values[0])
-
 class TicketSelectDefault(discord.ui.Select):
     def __init__(self):
         options = [
@@ -4112,14 +3978,11 @@ class TicketSelectDefault(discord.ui.Select):
             discord.SelectOption(label="Autre", description="Autres demandes", value="other", emoji="❓")
         ]
         super().__init__(placeholder="Choisissez une catégorie...", options=options)
-
     async def callback(self, interaction: discord.Interaction):
         await create_ticket(interaction, interaction.user, self.values[0])
-
 class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)  # Panel permanent
-
     @discord.ui.button(label="Fermer", style=discord.ButtonStyle.red, emoji="🔒")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="🔒 Ticket Fermé", description=f"Ticket fermé par {interaction.user.mention}", color=0xff0000)
@@ -4130,7 +3993,6 @@ class TicketControlView(discord.ui.View):
             if isinstance(target, discord.Member):
                 overwrite.send_messages = False
                 await interaction.channel.set_permissions(target, overwrite=overwrite)
-
     @discord.ui.button(label="Supprimer", style=discord.ButtonStyle.grey, emoji="🗑️")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("🗑️ Ticket sera supprimé dans 5 secondes...")
@@ -4153,7 +4015,6 @@ class TicketControlView(discord.ui.View):
             pass
         
         await interaction.channel.delete()
-
 class KeyPromotView(discord.ui.View):
     def __init__(self, button_label="Récupérer Clé"):
         super().__init__(timeout=None)  # Panel permanent
@@ -4162,7 +4023,6 @@ class KeyPromotView(discord.ui.View):
         button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.primary, emoji="🔑")
         button.callback = self.get_key
         self.add_item(button)
-
     async def get_key(self, interaction: discord.Interaction):
         data = get_guild_data(interaction.guild.id)
         guild_id = interaction.guild.id
@@ -4197,7 +4057,6 @@ class KeyPromotView(discord.ui.View):
             await interaction.response.send_message("✅ Clé envoyée en privé!", ephemeral=True)
         except:
             await interaction.response.send_message(f"🔑 **Votre clé:** `{key}`\n⚠️ Supprimez ce message après utilisation!", ephemeral=True)
-
 class FreeKeyView(discord.ui.View):
     def __init__(self, button_label="Récupérer Free Key"):
         super().__init__(timeout=None)  # Panel permanent
@@ -4206,7 +4065,6 @@ class FreeKeyView(discord.ui.View):
         button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.success, emoji="🆓")
         button.callback = self.get_free_key
         self.add_item(button)
-
     async def get_free_key(self, interaction: discord.Interaction):
         data = get_guild_data(interaction.guild.id)
         guild_id = interaction.guild.id
@@ -4233,7 +4091,6 @@ class FreeKeyView(discord.ui.View):
             await interaction.response.send_message("✅ Free key envoyée en privé!", ephemeral=True)
         except:
             await interaction.response.send_message(f"🆓 **Votre free key:** `{key}`\n⚠️ Supprimez ce message après utilisation!", ephemeral=True)
-
 class InactivityView(discord.ui.View):
     def __init__(self, guild_id, channel_id, creator_id):
         super().__init__(timeout=None)  # Permanent
@@ -4388,13 +4245,11 @@ class InactivityView(discord.ui.View):
                 )
             except:
                 pass
-
 # HELP VIEW PERMANENT
 class HelpView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)  # Panel permanent
         self.add_item(HelpSelect())
-
 class HelpSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -4478,7 +4333,6 @@ class HelpSelect(discord.ui.Select):
             )
         ]
         super().__init__(placeholder="Choisissez une catégorie...", options=options, row=0)
-
     async def callback(self, interaction: discord.Interaction):
         category = self.values[0]
         
@@ -4689,7 +4543,6 @@ class HelpSelect(discord.ui.Select):
         if embed:
             embed.set_footer(text="💡 Panels permanents : Tickets, Keys, Free Keys, Help | Bot créé par TEKAZ")
             await interaction.response.edit_message(embed=embed, view=self.view)
-
 # EVENT POUR LES RÉACTIONS DE GIVEAWAY
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -4699,7 +4552,6 @@ async def on_raw_reaction_add(payload):
     if payload.message_id in giveaways and str(payload.emoji) == "🎉":
         if payload.user_id not in giveaways[payload.message_id]['participants']:
             giveaways[payload.message_id]['participants'].append(payload.user_id)
-
 @bot.event
 async def on_raw_reaction_remove(payload):
     if payload.user_id == bot.user.id:
@@ -4708,14 +4560,10 @@ async def on_raw_reaction_remove(payload):
     if payload.message_id in giveaways and str(payload.emoji) == "🎉":
         if payload.user_id in giveaways[payload.message_id]['participants']:
             giveaways[payload.message_id]['participants'].remove(payload.user_id)
-
-
-
 class TranslateView(discord.ui.View):
     def __init__(self, text: str):
         super().__init__(timeout=None)
         self.text = text
-
     @discord.ui.button(
         label="Translate",
         emoji="🇬🇧",
@@ -4727,42 +4575,32 @@ class TranslateView(discord.ui.View):
                 source="auto",
                 target="en"
             ).translate(self.text)
-
             embed = discord.Embed(
                 title="🌍 Translation (EN)",
                 description=translated,
                 color=0x3498db
             )
-
             await interaction.response.send_message(
                 embed=embed,
                 ephemeral=True
             )
-
         except Exception:
             await interaction.response.send_message(
                 "❌ Translation impossible.",
                 ephemeral=True
             )
-
-
-
 @bot.event
 async def on_message(message: discord.Message):
     await bot.process_commands(message)
-
     # On ne traite QUE les messages du bot
     if not bot.user or message.author.id != bot.user.id:
         return
-
     # Pas d'embed
     if not message.embeds:
         return
-
     # Déjà un bouton
     if message.components:
         return
-
     # Construire le texte à traduire
     texts = []
     for embed in message.embeds:
@@ -4773,37 +4611,28 @@ async def on_message(message: discord.Message):
         for field in embed.fields:
             texts.append(field.name)
             texts.append(field.value)
-
     full_text = "\n".join(texts).strip()
     if not full_text:
         return
-
     # ⏳ Petite pause pour laisser Discord "stabiliser" le message
     await asyncio.sleep(0.3)
-
     try:
         await message.edit(view=TranslateView(full_text))
-
     except discord.NotFound:
         # Message supprimé ou non éditable → on ignore silencieusement
         return
-
     except discord.Forbidden:
         # Permissions insuffisantes
         return
-
     except discord.HTTPException:
         # Autre erreur HTTP (rate limit, etc.)
         return
-
-
 @bot.command(name="dm")
 async def dm(ctx, user: discord.User, *, message: str):
     # Vérification permissions (admin / rôles autorisés)
     if not ctx.author.guild_permissions.administrator:
         await ctx.send("❌ Tu n'as pas la permission d'utiliser cette commande.")
         return
-
     try:
         embed = discord.Embed(
             title="📩 Message privé",
@@ -4811,29 +4640,21 @@ async def dm(ctx, user: discord.User, *, message: str):
             color=0x5865F2,
             timestamp=datetime.now()
         )
-
         embed.set_footer(
             text=f"Envoyé depuis {ctx.guild.name}"
         )
-
         await user.send(embed=embed)
-
         await ctx.send(
             f"✅ Message envoyé à **{user}**"
         )
-
     except discord.Forbidden:
         await ctx.send(
             "❌ Impossible d'envoyer le message (DM fermés)."
         )
-
     except Exception:
         await ctx.send(
             "❌ Erreur lors de l'envoi du message."
         )
-
-
-
 @bot.tree.command(
     name="redeembot",
     description="Utiliser une clé pour recevoir l'accès"
@@ -4841,11 +4662,9 @@ async def dm(ctx, user: discord.User, *, message: str):
 @app_commands.describe(key="Clé reçue après l'achat")
 async def redeembot(interaction: discord.Interaction, key: str):
     data = get_guild_data(interaction.guild.id)
-
     # Sécurité structure
     if "used_keys" not in data:
         data["used_keys"] = {}
-
     # Clé invalide
     if key not in data["keys"]:
         await interaction.response.send_message(
@@ -4853,11 +4672,9 @@ async def redeembot(interaction: discord.Interaction, key: str):
             ephemeral=True
         )
         return
-
     # Consommer la clé
     data["keys"].remove(key)
     data["used_keys"][key] = interaction.user.id
-
     # Envoi du DM
     try:
         embed = discord.Embed(
@@ -4869,21 +4686,16 @@ async def redeembot(interaction: discord.Interaction, key: str):
             ),
             color=0x57F287
         )
-
         await interaction.user.send(embed=embed)
-
         await interaction.response.send_message(
             "✅ Clé validée ! Le lien t’a été envoyé en message privé.",
             ephemeral=True
         )
-
     except discord.Forbidden:
         await interaction.response.send_message(
             "❌ Impossible de t’envoyer un DM.\nActive tes messages privés puis réessaie.",
             ephemeral=True
         )
-
-
 @bot.tree.command(
     name="usedkeys",
     description="Voir les clés déjà utilisées"
@@ -4891,30 +4703,24 @@ async def redeembot(interaction: discord.Interaction, key: str):
 async def usedkeys(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
-
     data = get_guild_data(interaction.guild.id)
     used = data.get("used_keys", {})
-
     if not used:
         await interaction.response.send_message(
             "📭 Aucune clé utilisée.",
             ephemeral=True
         )
         return
-
     desc = "\n".join(
         f"`{k}` → <@{v}>"
         for k, v in used.items()
     )
-
     embed = discord.Embed(
         title="🔐 Clés utilisées",
         description=desc,
         color=0xed4245
     )
-
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.event
 async def on_command_error(ctx, error):
     """Éviter le spam CommandNotFound quand un utilisateur tape une slash commande en texte."""
@@ -4926,21 +4732,17 @@ async def on_command_error(ctx, error):
                 delete_after=10
             )
         return
-
-
 @bot.event
 async def on_ready():
     # Sync globale (peut prendre du temps à apparaître)
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées globalement")
-
     # Sync par guilde pour apparition immédiate des slash commandes
     for guild in bot.guilds:
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         print(f"✅ {guild.name}: {len(synced)} commandes synchronisées")
         await update_counter_channel_names(guild)
-
 # DÉMARRAGE DU BOT
 if __name__ == "__main__":
     bot.run(os.getenv('DISCORD_TOKEN'))
