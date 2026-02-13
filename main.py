@@ -23,6 +23,7 @@ giveaways = {}
 warnings = {}
 sticky_messages = {}
 temp_voice_channels = set()
+voice_temp_rooms = {}
 user_cooldowns = {}
 free_key_users = {}
 # NOUVEAU : Suivi temps réel de l'activité des tickets
@@ -45,6 +46,8 @@ def get_guild_data(guild_id):
                 'badwords': [],
                 'welcome_channel': None,
                 'welcome_message': 'Bienvenue {user} sur notre serveur !',
+                'seemember_channel_id': None,
+                'seemembervoc_channel_id': None,
                 'ticket_category': None,
                 'ticket_roles': [],
                 'ticket_logs_channel': None,
@@ -91,6 +94,9 @@ def get_guild_data(guild_id):
                         'button_keep': '🔄 Garder Ouvert',
                         'button_close': '🔒 Fermer le Ticket'
                     }
+                },
+                'voctemp': {
+                    'source_channel_id': None
                 }
             },
             'keys': [],
@@ -106,6 +112,40 @@ def get_guild_data(guild_id):
             'ticket_activity': {}
         }
     return guild_data[guild_id]
+
+def get_voice_member_count(guild: discord.Guild) -> int:
+    """Compter les membres actuellement connectés dans des salons vocaux."""
+    return sum(1 for member in guild.members if member.voice and member.voice.channel)
+
+
+async def update_counter_channel_names(guild: discord.Guild):
+    """Mettre à jour les noms des salons compteurs membres / membres vocaux."""
+    data = get_guild_data(guild.id)
+    config = data['config']
+
+    total_channel_id = config.get('seemember_channel_id')
+    if total_channel_id:
+        channel = guild.get_channel(total_channel_id)
+        if channel:
+            expected = f"👥 Membres: {guild.member_count}"
+            if channel.name != expected:
+                try:
+                    await channel.edit(name=expected, reason='Mise à jour compteur membres')
+                except Exception:
+                    pass
+
+    voice_channel_id = config.get('seemembervoc_channel_id')
+    if voice_channel_id:
+        channel = guild.get_channel(voice_channel_id)
+        if channel:
+            voice_count = get_voice_member_count(guild)
+            expected = f"🎙️ En vocal: {voice_count}"
+            if channel.name != expected:
+                try:
+                    await channel.edit(name=expected, reason='Mise à jour compteur vocaux')
+                except Exception:
+                    pass
+
 
 async def check_permissions(interaction: discord.Interaction) -> bool:
     """Vérifier les permissions et répondre si refusé"""
@@ -412,6 +452,7 @@ async def on_ready():
 @bot.event
 async def on_member_join(member):
     """Gestion des nouveaux membres"""
+    await update_counter_channel_names(member.guild)
     data = get_guild_data(member.guild.id)
     config = data['config']
     
@@ -433,6 +474,12 @@ async def on_member_join(member):
                 await channel.send(message)
         except:
             pass
+
+@bot.event
+async def on_member_remove(member):
+    """Mise à jour des compteurs à chaque départ."""
+    await update_counter_channel_names(member.guild)
+
 
 @bot.event
 async def on_message(message):
@@ -1685,6 +1732,525 @@ async def tempvoice(interaction: discord.Interaction, name: str, max_users: int 
         
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
+
+
+def build_voctemp_embed(channel: discord.VoiceChannel, owner: discord.Member, room_data: dict) -> discord.Embed:
+    mode_labels = {
+        'open': '🔊 Ouvert',
+        'closed': '🔒 Fermé',
+        'private': '📣 Privé'
+    }
+    toggles = room_data['toggles']
+    embed = discord.Embed(
+        title="⚙️ Configuration du salon vocal temporaire",
+        description=(
+            f"**Propriétaire :** {owner.mention}\n"
+            f"**Salon vocal :** {channel.mention}\n"
+            f"**Mode :** {mode_labels.get(room_data['mode'], 'Inconnu')}"
+        ),
+        color=0xa30174
+    )
+    embed.add_field(name="✅ Liste blanche", value=', '.join(f"<@{uid}>" for uid in room_data['whitelist']) or "Aucun", inline=False)
+    embed.add_field(name="⛔ Liste noire", value=', '.join(f"<@{uid}>" for uid in room_data['blacklist']) or "Aucun", inline=False)
+    embed.add_field(
+        name="🎛️ Permissions",
+        value=(
+            f"Micro: {'✅' if toggles['micro'] else '❌'} | "
+            f"Vidéo: {'✅' if toggles['video'] else '❌'} | "
+            f"Soundboard: {'✅' if toggles['soundboard'] else '❌'} | "
+            f"Statut: {'✅' if toggles['status'] else '❌'}"
+        ),
+        inline=False
+    )
+    return embed
+
+
+async def apply_voctemp_mode(channel: discord.VoiceChannel, room_data: dict):
+    guild = channel.guild
+    everyone = guild.default_role
+    mode = room_data['mode']
+
+    if mode == 'open':
+        await channel.set_permissions(everyone, view_channel=True, connect=True)
+    elif mode == 'closed':
+        await channel.set_permissions(everyone, view_channel=True, connect=False)
+    else:
+        await channel.set_permissions(everyone, view_channel=False, connect=False)
+
+    for user_id in room_data['blacklist']:
+        member = guild.get_member(user_id)
+        if member:
+            await channel.set_permissions(member, connect=False)
+
+    for user_id in room_data['whitelist']:
+        member = guild.get_member(user_id)
+        if member:
+            await channel.set_permissions(member, view_channel=True, connect=True)
+
+
+async def apply_voctemp_toggles(channel: discord.VoiceChannel, room_data: dict):
+    everyone = channel.guild.default_role
+    toggles = room_data['toggles']
+    await channel.set_permissions(
+        everyone,
+        speak=toggles['micro'],
+        stream=toggles['video'],
+        use_soundboard=toggles['soundboard'],
+        use_voice_activation=toggles['status']
+    )
+
+
+async def sync_voctemp_panel_access(guild: discord.Guild, room_data: dict, previous_owner_id: int = None):
+    """Rendre le salon panel privé et visible uniquement par le propriétaire actuel."""
+    text_channel = guild.get_channel(room_data['text_channel_id'])
+    if not text_channel:
+        return
+
+    everyone = guild.default_role
+    await text_channel.set_permissions(
+        everyone,
+        view_channel=False,
+        read_message_history=False,
+        send_messages=False
+    )
+
+    owner_member = guild.get_member(room_data['owner_id'])
+    if owner_member:
+        await text_channel.set_permissions(
+            owner_member,
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True
+        )
+
+    if previous_owner_id and previous_owner_id != room_data['owner_id']:
+        previous_owner = guild.get_member(previous_owner_id)
+        if previous_owner:
+            await text_channel.set_permissions(previous_owner, overwrite=None)
+
+    bot_member = guild.me
+    if bot_member:
+        await text_channel.set_permissions(
+            bot_member,
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True,
+            manage_messages=True
+        )
+
+
+class VocTempUserModal(discord.ui.Modal):
+    def __init__(self, action: str, voice_channel_id: int):
+        super().__init__(title=f"Voc Temp • {action}")
+        self.action = action
+        self.voice_channel_id = voice_channel_id
+        self.user_id_input = discord.ui.TextInput(label="ID utilisateur", placeholder="123456789012345678", required=True)
+        self.add_item(self.user_id_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        room_data = voice_temp_rooms.get(self.voice_channel_id)
+        if not room_data:
+            await interaction.response.send_message("❌ Salon temporaire introuvable.", ephemeral=True)
+            return
+
+        if interaction.user.id != room_data['owner_id']:
+            await interaction.response.send_message("❌ Seul le propriétaire peut gérer ce panel.", ephemeral=True)
+            return
+
+        try:
+            target_id = int(str(self.user_id_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
+            return
+
+        previous_owner_id = room_data['owner_id']
+
+        if self.action == 'whitelist':
+            room_data['whitelist'].add(target_id)
+            room_data['blacklist'].discard(target_id)
+            message = f"✅ <@{target_id}> ajouté à la liste blanche."
+        elif self.action == 'blacklist':
+            room_data['blacklist'].add(target_id)
+            room_data['whitelist'].discard(target_id)
+            message = f"✅ <@{target_id}> ajouté à la liste noire."
+        else:
+            target_member = interaction.guild.get_member(target_id)
+            if not target_member:
+                await interaction.response.send_message("❌ Ce membre n'est pas sur le serveur.", ephemeral=True)
+                return
+
+            room_data['owner_id'] = target_id
+            message = f"👑 Propriété transférée à <@{target_id}>."
+
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        if channel:
+            await apply_voctemp_mode(channel, room_data)
+            await apply_voctemp_toggles(channel, room_data)
+            if self.action == 'owner':
+                await channel.set_permissions(target_member, manage_channels=True, move_members=True, connect=True, view_channel=True)
+                previous_owner = interaction.guild.get_member(previous_owner_id)
+                if previous_owner:
+                    await channel.set_permissions(previous_owner, manage_channels=False, move_members=False)
+
+        if self.action == 'owner':
+            await sync_voctemp_panel_access(interaction.guild, room_data, previous_owner_id=previous_owner_id)
+            if interaction.message:
+                new_owner = interaction.guild.get_member(room_data['owner_id'])
+                voice_channel = interaction.guild.get_channel(self.voice_channel_id)
+                if new_owner and voice_channel:
+                    await interaction.message.edit(embed=build_voctemp_embed(voice_channel, new_owner, room_data))
+
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+class VocTempSetupModal(discord.ui.Modal, title="Configuration /voctemp"):
+    source_voice_id = discord.ui.TextInput(label="ID du salon vocal déclencheur", placeholder="123456789012345678", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await check_permissions(interaction):
+            return
+
+        try:
+            channel_id = int(str(self.source_voice_id).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ L'ID indiqué est invalide.", ephemeral=True)
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            await interaction.response.send_message("❌ Ce salon n'est pas un salon vocal valide.", ephemeral=True)
+            return
+
+        data = get_guild_data(interaction.guild.id)
+        data['config']['voctemp']['source_channel_id'] = channel_id
+        await interaction.response.send_message(f"✅ Setup terminé. Salon déclencheur: {channel.mention}", ephemeral=True)
+
+
+class VocTempSetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Configurer l'ID vocal", style=discord.ButtonStyle.primary, emoji="🛠️")
+    async def configure(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_permissions(interaction):
+            return
+        await interaction.response.send_modal(VocTempSetupModal())
+
+
+class VocTempPanelView(discord.ui.View):
+    def __init__(self, voice_channel_id: int):
+        super().__init__(timeout=None)
+        self.voice_channel_id = voice_channel_id
+
+    async def _owner_guard(self, interaction: discord.Interaction) -> bool:
+        room_data = voice_temp_rooms.get(self.voice_channel_id)
+        if not room_data:
+            await interaction.response.send_message("❌ Ce salon n'existe plus.", ephemeral=True)
+            return False
+        if interaction.user.id != room_data['owner_id']:
+            await interaction.response.send_message("❌ Seul le propriétaire peut utiliser ce panel.", ephemeral=True)
+            return False
+        return True
+
+    async def _refresh(self, interaction: discord.Interaction):
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms.get(self.voice_channel_id)
+        owner = interaction.guild.get_member(room_data['owner_id']) if room_data else None
+        if channel and room_data and owner:
+            embed = build_voctemp_embed(channel, owner, room_data)
+            await interaction.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="Ouvert", style=discord.ButtonStyle.success, emoji="🔊", row=0)
+    async def mode_open(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['mode'] = 'open'
+        await apply_voctemp_mode(channel, room_data)
+        await interaction.response.send_message("✅ Mode ouvert activé.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Fermé", style=discord.ButtonStyle.secondary, emoji="🔒", row=0)
+    async def mode_closed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['mode'] = 'closed'
+        await apply_voctemp_mode(channel, room_data)
+        await interaction.response.send_message("✅ Mode fermé activé.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Privé", style=discord.ButtonStyle.secondary, emoji="📣", row=0)
+    async def mode_private(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['mode'] = 'private'
+        await apply_voctemp_mode(channel, room_data)
+        await interaction.response.send_message("✅ Mode privé activé.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Liste blanche", style=discord.ButtonStyle.primary, emoji="📝", row=1)
+    async def whitelist(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        await interaction.response.send_modal(VocTempUserModal('whitelist', self.voice_channel_id))
+
+    @discord.ui.button(label="Liste noire", style=discord.ButtonStyle.danger, emoji="📛", row=1)
+    async def blacklist(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        await interaction.response.send_modal(VocTempUserModal('blacklist', self.voice_channel_id))
+
+    @discord.ui.button(label="Purge", style=discord.ButtonStyle.danger, emoji="⤴️", row=1)
+    async def purge(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        keepers = set(room_data['whitelist']) | {room_data['owner_id']}
+        for member in list(channel.members):
+            if member.id not in keepers:
+                await member.move_to(None, reason="Purge salon vocal temporaire")
+        await interaction.response.send_message("✅ Purge effectuée.", ephemeral=True)
+
+    @discord.ui.button(label="Micro", style=discord.ButtonStyle.secondary, emoji="🎙️", row=2)
+    async def toggle_micro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['toggles']['micro'] = not room_data['toggles']['micro']
+        await apply_voctemp_toggles(channel, room_data)
+        await interaction.response.send_message("✅ Permission micro mise à jour.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Vidéo", style=discord.ButtonStyle.secondary, emoji="📹", row=2)
+    async def toggle_video(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['toggles']['video'] = not room_data['toggles']['video']
+        await apply_voctemp_toggles(channel, room_data)
+        await interaction.response.send_message("✅ Permission vidéo mise à jour.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Soundboards", style=discord.ButtonStyle.secondary, emoji="🎛️", row=2)
+    async def toggle_soundboard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['toggles']['soundboard'] = not room_data['toggles']['soundboard']
+        await apply_voctemp_toggles(channel, room_data)
+        await interaction.response.send_message("✅ Permission soundboard mise à jour.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Statut", style=discord.ButtonStyle.secondary, emoji="📌", row=3)
+    async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        channel = interaction.guild.get_channel(self.voice_channel_id)
+        room_data = voice_temp_rooms[self.voice_channel_id]
+        room_data['toggles']['status'] = not room_data['toggles']['status']
+        await apply_voctemp_toggles(channel, room_data)
+        await interaction.response.send_message("✅ Permission statut mise à jour.", ephemeral=True)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Transférer la propriété", style=discord.ButtonStyle.primary, emoji="👑", row=4)
+    async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_guard(interaction):
+            return
+        await interaction.response.send_modal(VocTempUserModal('owner', self.voice_channel_id))
+
+
+@bot.tree.command(name="voctemp", description="Configurer le système de salons vocaux temporaires")
+async def voctemp(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+
+    data = get_guild_data(interaction.guild.id)
+    current_id = data['config']['voctemp'].get('source_channel_id')
+    current_channel = interaction.guild.get_channel(current_id) if current_id else None
+    current_text = current_channel.mention if current_channel else "Non configuré"
+
+    embed = discord.Embed(
+        title="🛠️ Setup Voc Temp",
+        description=(
+            "Définissez l'ID du salon vocal **déclencheur**.\n"
+            "Quand un membre le rejoint, le bot crée une voc temporaire et le déplace dedans."
+        ),
+        color=0x5865f2
+    )
+    embed.add_field(name="Salon actuel", value=current_text, inline=False)
+    await interaction.response.send_message(embed=embed, view=VocTempSetupView(), ephemeral=True)
+
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if member.bot:
+        return
+
+    data = get_guild_data(member.guild.id)
+    source_id = data['config']['voctemp'].get('source_channel_id')
+
+    if source_id and after.channel and after.channel.id == source_id:
+        category = after.channel.category
+        temp_channel = await member.guild.create_voice_channel(
+            name=f"🔊 {member.display_name}",
+            category=category,
+            reason="Création voc temporaire"
+        )
+        panel_overwrites = {
+            member.guild.default_role: discord.PermissionOverwrite(view_channel=False, read_message_history=False, send_messages=False),
+            member: discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True)
+        }
+        if member.guild.me:
+            panel_overwrites[member.guild.me] = discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True, manage_messages=True)
+
+        text_channel = await member.guild.create_text_channel(
+            name=f"panel-{member.display_name[:12].lower().replace(' ', '-')}",
+            category=category,
+            overwrites=panel_overwrites,
+            reason="Panel voc temporaire"
+        )
+
+        room_data = {
+            'guild_id': member.guild.id,
+            'owner_id': member.id,
+            'text_channel_id': text_channel.id,
+            'mode': 'open',
+            'whitelist': set(),
+            'blacklist': set(),
+            'toggles': {
+                'micro': True,
+                'video': True,
+                'soundboard': True,
+                'status': True
+            }
+        }
+        voice_temp_rooms[temp_channel.id] = room_data
+        temp_voice_channels.add(temp_channel.id)
+
+        await temp_channel.set_permissions(member, manage_channels=True, move_members=True, connect=True, view_channel=True)
+        await sync_voctemp_panel_access(member.guild, room_data)
+        await member.move_to(temp_channel)
+
+        embed = build_voctemp_embed(temp_channel, member, room_data)
+        await text_channel.send(content=member.mention, embed=embed, view=VocTempPanelView(temp_channel.id))
+
+    for channel in [before.channel]:
+        if channel and channel.id in voice_temp_rooms and len(channel.members) == 0:
+            room_data = voice_temp_rooms.pop(channel.id)
+            temp_voice_channels.discard(channel.id)
+            text_channel = member.guild.get_channel(room_data['text_channel_id'])
+            try:
+                await channel.delete(reason="Suppression voc temporaire vide")
+            except:
+                pass
+            if text_channel:
+                try:
+                    await text_channel.delete(reason="Suppression panel voc temporaire")
+                except:
+                    pass
+
+    await update_counter_channel_names(member.guild)
+
+class SeeMemberSetupModal(discord.ui.Modal):
+    def __init__(self, mode: str):
+        title = "Setup /seemember" if mode == 'members' else "Setup /seemembervoc"
+        super().__init__(title=title)
+        self.mode = mode
+        self.channel_id_input = discord.ui.TextInput(
+            label="ID du salon vocal",
+            placeholder="123456789012345678",
+            required=True
+        )
+        self.add_item(self.channel_id_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await check_permissions(interaction):
+            return
+
+        try:
+            channel_id = int(str(self.channel_id_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            await interaction.response.send_message("❌ Ce salon n'est pas un salon vocal valide.", ephemeral=True)
+            return
+
+        await channel.set_permissions(interaction.guild.default_role, view_channel=True, connect=False)
+
+        data = get_guild_data(interaction.guild.id)
+        if self.mode == 'members':
+            data['config']['seemember_channel_id'] = channel.id
+            await channel.edit(name=f"👥 Membres: {interaction.guild.member_count}")
+            msg = f"✅ Setup /seemember terminé sur {channel.mention}."
+        else:
+            data['config']['seemembervoc_channel_id'] = channel.id
+            await channel.edit(name=f"🎙️ En vocal: {get_voice_member_count(interaction.guild)}")
+            msg = f"✅ Setup /seemembervoc terminé sur {channel.mention}."
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class SeeMemberSetupView(discord.ui.View):
+    def __init__(self, mode: str):
+        super().__init__(timeout=180)
+        self.mode = mode
+
+    @discord.ui.button(label="Configurer l'ID vocal", style=discord.ButtonStyle.primary, emoji="🛠️")
+    async def configure(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_permissions(interaction):
+            return
+        await interaction.response.send_modal(SeeMemberSetupModal(self.mode))
+
+
+@bot.tree.command(name="seemember", description="Configurer le salon vocal qui affiche le nombre total de membres")
+async def seemember(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+
+    data = get_guild_data(interaction.guild.id)
+    channel_id = data['config'].get('seemember_channel_id')
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+
+    embed = discord.Embed(
+        title="🛠️ Setup /seemember",
+        description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre total de membres.",
+        color=0x5865f2
+    )
+    embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
+
+    await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('members'), ephemeral=True)
+
+
+@bot.tree.command(name="seemembervoc", description="Configurer le salon vocal qui affiche le nombre de membres en vocal")
+async def seemembervoc(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+
+    data = get_guild_data(interaction.guild.id)
+    channel_id = data['config'].get('seemembervoc_channel_id')
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+
+    embed = discord.Embed(
+        title="🛠️ Setup /seemembervoc",
+        description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre de membres en vocal.",
+        color=0x5865f2
+    )
+    embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
+
+    await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('voice'), ephemeral=True)
+
 
 @bot.tree.command(name="welcome-set", description="Configurer le message de bienvenue pour les nouveaux membres")
 @app_commands.describe(channel="Salon de bienvenue", message="Message ({user} sera remplacé par la mention)")
@@ -4350,9 +4916,25 @@ async def usedkeys(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
+async def on_command_error(ctx, error):
+    """Éviter le spam CommandNotFound quand un utilisateur tape une slash commande en texte."""
+    if isinstance(error, commands.CommandNotFound):
+        content = (ctx.message.content or '').strip().lower()
+        if content.startswith('/seemember') or content.startswith('/seemembervoc'):
+            await ctx.send(
+                "ℹ️ Ces commandes sont des **slash commandes**. Tapez `/` puis choisissez `/seemember` ou `/seemembervoc` dans la liste.",
+                delete_after=10
+            )
+        return
+
+
+@bot.event
 async def on_ready():
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
+
+    for guild in bot.guilds:
+        await update_counter_channel_names(guild)
 
 # DÉMARRAGE DU BOT
 if __name__ == "__main__":
