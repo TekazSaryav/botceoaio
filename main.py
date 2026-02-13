@@ -2160,59 +2160,96 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     await update_counter_channel_names(member.guild)
 
-@bot.tree.command(name="seemember", description="Créer/mettre à jour un salon compteur du nombre total de membres")
+class SeeMemberSetupModal(discord.ui.Modal):
+    def __init__(self, mode: str):
+        title = "Setup /seemember" if mode == 'members' else "Setup /seemembervoc"
+        super().__init__(title=title)
+        self.mode = mode
+        self.channel_id_input = discord.ui.TextInput(
+            label="ID du salon vocal",
+            placeholder="123456789012345678",
+            required=True
+        )
+        self.add_item(self.channel_id_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await check_permissions(interaction):
+            return
+
+        try:
+            channel_id = int(str(self.channel_id_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ ID invalide.", ephemeral=True)
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            await interaction.response.send_message("❌ Ce salon n'est pas un salon vocal valide.", ephemeral=True)
+            return
+
+        await channel.set_permissions(interaction.guild.default_role, view_channel=True, connect=False)
+
+        data = get_guild_data(interaction.guild.id)
+        if self.mode == 'members':
+            data['config']['seemember_channel_id'] = channel.id
+            await channel.edit(name=f"👥 Membres: {interaction.guild.member_count}")
+            msg = f"✅ Setup /seemember terminé sur {channel.mention}."
+        else:
+            data['config']['seemembervoc_channel_id'] = channel.id
+            await channel.edit(name=f"🎙️ En vocal: {get_voice_member_count(interaction.guild)}")
+            msg = f"✅ Setup /seemembervoc terminé sur {channel.mention}."
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class SeeMemberSetupView(discord.ui.View):
+    def __init__(self, mode: str):
+        super().__init__(timeout=180)
+        self.mode = mode
+
+    @discord.ui.button(label="Configurer l'ID vocal", style=discord.ButtonStyle.primary, emoji="🛠️")
+    async def configure(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_permissions(interaction):
+            return
+        await interaction.response.send_modal(SeeMemberSetupModal(self.mode))
+
+
+@bot.tree.command(name="seemember", description="Configurer le salon vocal qui affiche le nombre total de membres")
 async def seemember(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
 
-    guild = interaction.guild
-    data = get_guild_data(guild.id)
-    config = data['config']
+    data = get_guild_data(interaction.guild.id)
+    channel_id = data['config'].get('seemember_channel_id')
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
 
-    channel = guild.get_channel(config.get('seemember_channel_id')) if config.get('seemember_channel_id') else None
+    embed = discord.Embed(
+        title="🛠️ Setup /seemember",
+        description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre total de membres.",
+        color=0x5865f2
+    )
+    embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
 
-    if channel is None:
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False)
-        }
-        channel = await guild.create_voice_channel(
-            name=f"👥 Membres: {guild.member_count}",
-            overwrites=overwrites,
-            reason=f"Créé par /seemember ({interaction.user})"
-        )
-        config['seemember_channel_id'] = channel.id
-    else:
-        await channel.edit(name=f"👥 Membres: {guild.member_count}")
-
-    await interaction.response.send_message(f"✅ Salon compteur membres prêt: {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('members'), ephemeral=True)
 
 
-@bot.tree.command(name="seemembervoc", description="Créer/mettre à jour un salon compteur des membres en vocal")
+@bot.tree.command(name="seemembervoc", description="Configurer le salon vocal qui affiche le nombre de membres en vocal")
 async def seemembervoc(interaction: discord.Interaction):
     if not await check_permissions(interaction):
         return
 
-    guild = interaction.guild
-    data = get_guild_data(guild.id)
-    config = data['config']
-    voice_count = get_voice_member_count(guild)
+    data = get_guild_data(interaction.guild.id)
+    channel_id = data['config'].get('seemembervoc_channel_id')
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
 
-    channel = guild.get_channel(config.get('seemembervoc_channel_id')) if config.get('seemembervoc_channel_id') else None
+    embed = discord.Embed(
+        title="🛠️ Setup /seemembervoc",
+        description="Entrez l'ID du salon vocal à utiliser pour afficher le nombre de membres en vocal.",
+        color=0x5865f2
+    )
+    embed.add_field(name="Salon actuel", value=channel.mention if channel else "Non configuré", inline=False)
 
-    if channel is None:
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False)
-        }
-        channel = await guild.create_voice_channel(
-            name=f"🎙️ En vocal: {voice_count}",
-            overwrites=overwrites,
-            reason=f"Créé par /seemembervoc ({interaction.user})"
-        )
-        config['seemembervoc_channel_id'] = channel.id
-    else:
-        await channel.edit(name=f"🎙️ En vocal: {voice_count}")
-
-    await interaction.response.send_message(f"✅ Salon compteur vocaux prêt: {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=SeeMemberSetupView('voice'), ephemeral=True)
 
 
 @bot.tree.command(name="welcome-set", description="Configurer le message de bienvenue pour les nouveaux membres")
