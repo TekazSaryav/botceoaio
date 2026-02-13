@@ -4916,6 +4916,19 @@ async def usedkeys(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
+async def on_command_error(ctx, error):
+    """Éviter le spam CommandNotFound quand un utilisateur tape une slash commande en texte."""
+    if isinstance(error, commands.CommandNotFound):
+        content = (ctx.message.content or '').strip().lower()
+        if content.startswith('/seemember') or content.startswith('/seemembervoc'):
+            await ctx.send(
+                "ℹ️ Ces commandes sont des **slash commandes**. Tapez `/` puis choisissez `/seemember` ou `/seemembervoc` dans la liste.",
+                delete_after=10
+            )
+        return
+
+
+@bot.event
 async def on_ready():
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
