@@ -46,6 +46,8 @@ def get_guild_data(guild_id):
                 'badwords': [],
                 'welcome_channel': None,
                 'welcome_message': 'Bienvenue {user} sur notre serveur !',
+                'seemember_channel_id': None,
+                'seemembervoc_channel_id': None,
                 'ticket_category': None,
                 'ticket_roles': [],
                 'ticket_logs_channel': None,
@@ -110,6 +112,40 @@ def get_guild_data(guild_id):
             'ticket_activity': {}
         }
     return guild_data[guild_id]
+
+def get_voice_member_count(guild: discord.Guild) -> int:
+    """Compter les membres actuellement connectés dans des salons vocaux."""
+    return sum(1 for member in guild.members if member.voice and member.voice.channel)
+
+
+async def update_counter_channel_names(guild: discord.Guild):
+    """Mettre à jour les noms des salons compteurs membres / membres vocaux."""
+    data = get_guild_data(guild.id)
+    config = data['config']
+
+    total_channel_id = config.get('seemember_channel_id')
+    if total_channel_id:
+        channel = guild.get_channel(total_channel_id)
+        if channel:
+            expected = f"👥 Membres: {guild.member_count}"
+            if channel.name != expected:
+                try:
+                    await channel.edit(name=expected, reason='Mise à jour compteur membres')
+                except Exception:
+                    pass
+
+    voice_channel_id = config.get('seemembervoc_channel_id')
+    if voice_channel_id:
+        channel = guild.get_channel(voice_channel_id)
+        if channel:
+            voice_count = get_voice_member_count(guild)
+            expected = f"🎙️ En vocal: {voice_count}"
+            if channel.name != expected:
+                try:
+                    await channel.edit(name=expected, reason='Mise à jour compteur vocaux')
+                except Exception:
+                    pass
+
 
 async def check_permissions(interaction: discord.Interaction) -> bool:
     """Vérifier les permissions et répondre si refusé"""
@@ -416,6 +452,7 @@ async def on_ready():
 @bot.event
 async def on_member_join(member):
     """Gestion des nouveaux membres"""
+    await update_counter_channel_names(member.guild)
     data = get_guild_data(member.guild.id)
     config = data['config']
     
@@ -437,6 +474,12 @@ async def on_member_join(member):
                 await channel.send(message)
         except:
             pass
+
+@bot.event
+async def on_member_remove(member):
+    """Mise à jour des compteurs à chaque départ."""
+    await update_counter_channel_names(member.guild)
+
 
 @bot.event
 async def on_message(message):
@@ -2114,6 +2157,63 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                     await text_channel.delete(reason="Suppression panel voc temporaire")
                 except:
                     pass
+
+    await update_counter_channel_names(member.guild)
+
+@bot.tree.command(name="seemember", description="Créer/mettre à jour un salon compteur du nombre total de membres")
+async def seemember(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+
+    guild = interaction.guild
+    data = get_guild_data(guild.id)
+    config = data['config']
+
+    channel = guild.get_channel(config.get('seemember_channel_id')) if config.get('seemember_channel_id') else None
+
+    if channel is None:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False)
+        }
+        channel = await guild.create_voice_channel(
+            name=f"👥 Membres: {guild.member_count}",
+            overwrites=overwrites,
+            reason=f"Créé par /seemember ({interaction.user})"
+        )
+        config['seemember_channel_id'] = channel.id
+    else:
+        await channel.edit(name=f"👥 Membres: {guild.member_count}")
+
+    await interaction.response.send_message(f"✅ Salon compteur membres prêt: {channel.mention}", ephemeral=True)
+
+
+@bot.tree.command(name="seemembervoc", description="Créer/mettre à jour un salon compteur des membres en vocal")
+async def seemembervoc(interaction: discord.Interaction):
+    if not await check_permissions(interaction):
+        return
+
+    guild = interaction.guild
+    data = get_guild_data(guild.id)
+    config = data['config']
+    voice_count = get_voice_member_count(guild)
+
+    channel = guild.get_channel(config.get('seemembervoc_channel_id')) if config.get('seemembervoc_channel_id') else None
+
+    if channel is None:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False)
+        }
+        channel = await guild.create_voice_channel(
+            name=f"🎙️ En vocal: {voice_count}",
+            overwrites=overwrites,
+            reason=f"Créé par /seemembervoc ({interaction.user})"
+        )
+        config['seemembervoc_channel_id'] = channel.id
+    else:
+        await channel.edit(name=f"🎙️ En vocal: {voice_count}")
+
+    await interaction.response.send_message(f"✅ Salon compteur vocaux prêt: {channel.mention}", ephemeral=True)
+
 
 @bot.tree.command(name="welcome-set", description="Configurer le message de bienvenue pour les nouveaux membres")
 @app_commands.describe(channel="Salon de bienvenue", message="Message ({user} sera remplacé par la mention)")
@@ -4782,6 +4882,9 @@ async def usedkeys(interaction: discord.Interaction):
 async def on_ready():
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
+
+    for guild in bot.guilds:
+        await update_counter_channel_names(guild)
 
 # DÉMARRAGE DU BOT
 if __name__ == "__main__":
