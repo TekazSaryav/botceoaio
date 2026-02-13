@@ -4930,10 +4930,15 @@ async def on_command_error(ctx, error):
 
 @bot.event
 async def on_ready():
+    # Sync globale (peut prendre du temps à apparaître)
     await bot.tree.sync()
-    print("✅ Commandes slash synchronisées")
+    print("✅ Commandes slash synchronisées globalement")
 
+    # Sync par guilde pour apparition immédiate des slash commandes
     for guild in bot.guilds:
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"✅ {guild.name}: {len(synced)} commandes synchronisées")
         await update_counter_channel_names(guild)
 
 # DÉMARRAGE DU BOT
