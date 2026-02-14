@@ -13,7 +13,12 @@ from deep_translator import GoogleTranslator
 load_dotenv()
 # Configuration du bot
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='/', intents=intents)
+# Les slash commandes (/...) restent actives via bot.tree,
+# et les commandes préfixées peuvent maintenant utiliser / ou +.
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned_or('/', '+'),
+    intents=intents
+)
 # Stockage en mémoire des données
 guild_data = {}
 giveaways = {}
